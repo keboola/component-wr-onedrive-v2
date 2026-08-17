@@ -21,6 +21,14 @@ from pydantic import ValidationError
 
 from client.auth import AuthenticationError, RefreshTokenProvider, TokenProvider
 from client.drives import get_site_id, list_drives, resolve_drive_id
+from client.excel_writer import (
+    list_worksheets_with_headers,
+    resolve_workbook,
+    resolve_worksheet,
+    search_workbook,
+    workbook_session,
+    write_table,
+)
 from client.exceptions import (
     FileAlreadyExistsError,
     GraphBadRequestError,
@@ -30,11 +38,16 @@ from client.exceptions import (
     GraphQuotaExceededError,
     GraphRateLimitCapExceededError,
     InvalidPathError,
+    InvalidWorkbookFormatError,
+    InvalidWorkbookPathError,
+    MultipleSitesFoundError,
     UploadSessionError,
+    WorkbookNotFoundError,
+    WorksheetNotFoundError,
 )
 from client.graph_client import GraphClient
 from client.uploader import ensure_folder, resolve_placeholders, upload_file, validate_path
-from configuration import Account, AccountType, CsvOptions, Mode, RowConfig
+from configuration import Account, AccountType, CsvOptions, Mode, RowConfig, Workbook, Worksheet
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +75,11 @@ _USER_FACING_ERRORS = (
     InvalidPathError,
     FileAlreadyExistsError,
     UploadSessionError,
+    InvalidWorkbookPathError,
+    InvalidWorkbookFormatError,
+    MultipleSitesFoundError,
+    WorkbookNotFoundError,
+    WorksheetNotFoundError,
 )
 
 
@@ -126,6 +144,122 @@ class Component(ComponentBase):
             raise UserException(str(exc)) from exc
         return [SelectElement(label=drive["name"], value=drive["id"]) for drive in drives]
 
+    @sync_action("search")
+    def search(self) -> dict:
+        """v1-parity ``search`` sync action (design spec §5): find a workbook by ``workbook.path``.
+
+        Unlike the other three v1-parity actions, ``search`` only ever accepts a ``path`` (v1's
+        ``WorkbooksFinder::search`` takes a single search string, never ``driveId``/``fileId``).
+        A well-formed path that resolves to nothing returns ``{"file": null}``; an unrecognized
+        path format or an inaccessible sharing link is always a ``UserException`` — v1 never
+        treats those as "not found".
+        """
+        account = self._load_account()
+        client = self._build_client(account)
+        path = self._require_workbook_path('To search for a workbook please configure "parameters.workbook.path".')
+        try:
+            result = search_workbook(client, account, path)
+        except (AuthenticationError, GraphClientError) as exc:
+            raise UserException(str(exc)) from exc
+        if result is None:
+            return {"file": None}
+        return {
+            "file": {
+                "driveId": result.drive_id,
+                "fileId": result.file_id,
+                "name": result.name,
+                "path": result.path,
+            }
+        }
+
+    @sync_action("getWorksheets")
+    def get_worksheets(self) -> dict:
+        """v1-parity ``getWorksheets`` sync action (design spec §5): list a workbook's sheets.
+
+        ``workbook`` accepts either targeting form (ids or path, design spec §5's ``Workbook``
+        model). A path-mode target that doesn't exist is a ``UserException`` here — unlike
+        ``search``'s ``{"file": null}`` and unlike row-run Excel mode's create-on-missing,
+        listing a workbook's worksheets should never have the side effect of creating it (a
+        deliberate deviation from v1, which silently creates the workbook in this case; see the
+        Task 8 report for detail).
+        """
+        account = self._load_account()
+        client = self._build_client(account)
+        workbook = self._load_workbook_param()
+        try:
+            drive_id, file_id, _created = resolve_workbook(client, account, workbook, create_if_missing=False)
+            worksheets = list_worksheets_with_headers(client, drive_id, file_id)
+        except (AuthenticationError, GraphClientError) as exc:
+            raise UserException(str(exc)) from exc
+        return {"worksheets": worksheets}
+
+    @sync_action("createWorkbook")
+    def create_workbook(self) -> dict:
+        """v1-parity ``createWorkbook`` sync action (design spec §5): create an empty workbook.
+
+        Only ``workbook.path`` is accepted (v1 parity — there is no "create by ids" concept).
+        Reuses :func:`~client.excel_writer.resolve_workbook`'s create-on-missing path-mode
+        resolution; its ``created`` flag distinguishes "just created" from "already existed",
+        which is exactly the check v1's ``SheetProvider::createFile`` performs too.
+        """
+        account = self._load_account()
+        client = self._build_client(account)
+        path = self._require_workbook_path('To create workbook please configure "parameters.workbook.path".')
+        try:
+            drive_id, file_id, created = resolve_workbook(client, account, Workbook(path=path))
+        except (AuthenticationError, GraphClientError) as exc:
+            raise UserException(str(exc)) from exc
+        if not created:
+            raise UserException(f'Workbook "{path}" already exists.')
+        return {"file": {"driveId": drive_id, "fileId": file_id}}
+
+    @sync_action("createWorksheet")
+    def create_worksheet(self) -> dict:
+        """v1-parity ``createWorksheet`` sync action (design spec §5): add a named worksheet.
+
+        ``workbook`` accepts either targeting form (ids or path); the workbook itself is never
+        created here (``create_if_missing=False`` — same reasoning as ``getWorksheets``).
+        ``worksheet.name`` is required; :func:`~client.excel_writer.resolve_worksheet` (the same
+        name-mode targeting row-run Excel mode uses) creates the sheet when it's missing, and its
+        ``is_new`` return value is the "already exists" check, mirroring v1's
+        ``SheetProvider::createSheet``.
+        """
+        account = self._load_account()
+        client = self._build_client(account)
+        workbook = self._load_workbook_param()
+        worksheet_params = self.configuration.parameters.get("worksheet") or {}
+        name = worksheet_params.get("name")
+        if not name:
+            raise UserException('To create worksheet please configure "parameters.worksheet.name".')
+        try:
+            drive_id, file_id, _workbook_created = resolve_workbook(client, account, workbook, create_if_missing=False)
+            worksheet_id, created, _actual_name = resolve_worksheet(
+                client, drive_id, file_id, Worksheet(name=name), session=None
+            )
+        except (AuthenticationError, GraphClientError) as exc:
+            raise UserException(str(exc)) from exc
+        if not created:
+            raise UserException(f'Worksheet "{name}" already exists.')
+        return {"worksheet": {"driveId": drive_id, "fileId": file_id, "worksheetId": worksheet_id}}
+
+    def _require_workbook_path(self, missing_message: str) -> str:
+        path = (self.configuration.parameters.get("workbook") or {}).get("path")
+        if not path:
+            raise UserException(missing_message)
+        return path
+
+    def _load_workbook_param(self) -> Workbook:
+        """Validate just ``parameters.workbook`` (ids or path) for a sync action.
+
+        Used by ``getWorksheets``/``createWorksheet``, which — unlike ``search``/
+        ``createWorkbook`` — accept either targeting form (design spec §5).
+        """
+        workbook_params = self.configuration.parameters.get("workbook")
+        try:
+            return Workbook.model_validate(workbook_params or {})
+        except ValidationError as e:
+            raise UserException(f"Invalid workbook configuration: {_format_validation_error(e)}") from e
+
     def _load_configuration(self) -> RowConfig:
         try:
             return RowConfig.model_validate(self.configuration.parameters)
@@ -172,11 +306,45 @@ class Component(ComponentBase):
         logger.info("Uploaded CSV file '%s' to '%s'.", file_name, target_path)
 
     def _run_excel_mode(self, config: RowConfig, client: GraphClient, drive_id: str) -> None:
-        """Stub — Excel worksheet mode is wired in a later task (plan Task 8)."""
-        raise UserException(
-            "Mode 'table_excel' is not implemented yet; it is coming in a later release "
-            "(plan Task 8). Use mode 'file' or 'table_csv' for now."
+        """Write the row's single input table into an Excel worksheet (design spec §5/§6).
+
+        Unlike file/CSV mode, Excel mode never uses the ``drive_id`` the caller resolved from
+        ``destination.drive_id`` (that field doesn't even apply here) — the target drive comes
+        entirely from ``workbook.{path,drive_id,file_id}``, resolved below via
+        :func:`~client.excel_writer.resolve_workbook`.
+        """
+        if config.account.account_type == AccountType.PRIVATE_ONEDRIVE:
+            raise UserException(
+                "Mode 'table_excel' is not supported for account_type 'private_onedrive': the "
+                "Microsoft Graph Excel API is only available for OneDrive for Business and "
+                "SharePoint accounts."
+            )
+        table = self._require_single_input_table()
+        # `RowConfig._validate_mode_requirements` guarantees both are set for mode 'table_excel'.
+        assert config.workbook is not None and config.worksheet is not None
+
+        workbook_drive_id, workbook_file_id, workbook_created = resolve_workbook(
+            client, config.account, config.workbook
         )
+        with workbook_session(client, workbook_drive_id, workbook_file_id) as session:
+            worksheet_id, worksheet_created, _actual_name = resolve_worksheet(
+                client, workbook_drive_id, workbook_file_id, config.worksheet, session
+            )
+            wrote = write_table(
+                client,
+                workbook_drive_id,
+                workbook_file_id,
+                worksheet_id,
+                table.full_path,
+                append=config.append,
+                batch_size=config.batch_size,
+                is_new_sheet=workbook_created or worksheet_created,
+                session=session,
+            )
+        if not wrote:
+            logger.warning('Ignored empty CSV file "%s".', table.name)
+            return
+        logger.info("Wrote table '%s' to the Excel worksheet.", table.name)
 
     def _resolve_destination_folder(
         self, config: RowConfig, client: GraphClient, drive_id: str, now: datetime

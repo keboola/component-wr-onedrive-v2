@@ -1,0 +1,20 @@
+{
+  "authorization": {
+    "oauth_api": {
+      "credentials": {
+        "#data": "${OAUTH_DATA}",
+        "#appSecret": "${OAUTH_APP_SECRET}",
+        "appKey": "${OAUTH_APP_ID}"
+      }
+    }
+  },
+  "action": "createWorksheet",
+  "parameters": {
+    "workbook": {
+      "path": "drive://${FIXTURES_CATALOG::getDriveId}${FIXTURES_CATALOG::DRIVE::TMP_FILE::FILE_ONE_SHEET::getPath}"
+    },
+    "worksheet": {
+      "name": "Only One Sheet"
+    }
+  }
+}

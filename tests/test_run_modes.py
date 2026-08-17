@@ -301,23 +301,107 @@ class TestTokenStatePersistence:
         assert not (tmp_path / "data" / "out" / "state.json").exists()
 
 
-class TestExcelModeStub:
-    def test_raises_not_implemented_user_exception(self, tmp_path):
+def _fake_session_context_manager(session_id: str | None) -> MagicMock:
+    """A `workbook_session`-shaped context manager double yielding `session_id`."""
+    context_manager = MagicMock()
+    context_manager.__enter__.return_value = session_id
+    context_manager.__exit__.return_value = False
+    return context_manager
+
+
+class TestExcelMode:
+    """Excel mode wiring (plan Task 8): personal-account gate, empty CSV, happy-path plumbing.
+
+    `resolve_workbook`/`workbook_session`/`resolve_worksheet`/`write_table` themselves are
+    exercised at the unit level in ``tests/test_excel_writer.py`` (plan Task 7); these tests only
+    assert `Component._run_excel_mode` wires them together correctly.
+    """
+
+    def test_private_onedrive_account_raises_user_exception(self, tmp_path):
+        parameters = {
+            "mode": "table_excel",
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.resolve_workbook") as mock_resolve_workbook,
+            pytest.raises(UserException, match="private_onedrive"),
+        ):
+            comp.run()
+
+        mock_resolve_workbook.assert_not_called()
+
+    def test_empty_csv_logs_v1_parity_warning_and_exits_cleanly(self, tmp_path, caplog):
         parameters = {
             "mode": "table_excel",
             "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
             "workbook": {"path": "/book.xlsx"},
             "worksheet": {"name": "Sheet1"},
         }
-        comp = _build_component(tmp_path, parameters)
+        comp = _build_component(tmp_path, parameters, tables={"empty": ""})
 
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
             mock.patch("component.resolve_drive_id", return_value="drive-1"),
-            pytest.raises(UserException, match="not implemented"),
+            mock.patch("component.resolve_workbook", return_value=("wb-drive", "wb-file", False)),
+            mock.patch("component.workbook_session", return_value=_fake_session_context_manager("session-1")),
+            mock.patch("component.resolve_worksheet", return_value=("sheet-1", False, "Sheet1")),
+            mock.patch("component.write_table", return_value=False) as mock_write,
+            caplog.at_level("WARNING"),
+        ):
+            comp.run()  # must not raise — v1 parity: exit 0, sheet untouched.
+
+        mock_write.assert_called_once()
+        assert 'Ignored empty CSV file "empty".' in caplog.text
+
+    def test_happy_path_passes_configured_append_and_batch_size_to_write_table(self, tmp_path):
+        parameters = {
+            "mode": "table_excel",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+            "append": True,
+            "batch_size": 1234,
+        }
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch(
+                "component.resolve_workbook", return_value=("wb-drive", "wb-file", False)
+            ) as mock_resolve_workbook,
+            mock.patch(
+                "component.workbook_session", return_value=_fake_session_context_manager("session-1")
+            ) as mock_session,
+            mock.patch(
+                "component.resolve_worksheet", return_value=("sheet-1", False, "Sheet1")
+            ) as mock_resolve_worksheet,
+            mock.patch("component.write_table", return_value=True) as mock_write,
         ):
             comp.run()
+
+        mock_resolve_workbook.assert_called_once()
+        assert mock_resolve_workbook.call_args.args[1].account_type.value == "onedrive_for_business"
+        mock_session.assert_called_once_with(mock.ANY, "wb-drive", "wb-file")
+        assert mock_resolve_worksheet.call_args.args[1:3] == ("wb-drive", "wb-file")
+        assert mock_resolve_worksheet.call_args.args[4] == "session-1"
+
+        mock_write.assert_called_once()
+        write_args = mock_write.call_args
+        assert write_args.args[1:4] == ("wb-drive", "wb-file", "sheet-1")
+        assert write_args.kwargs["append"] is True
+        assert write_args.kwargs["batch_size"] == 1234
+        assert write_args.kwargs["is_new_sheet"] is False
+        assert write_args.kwargs["session"] == "session-1"
 
 
 class TestErrorMapping:

@@ -113,3 +113,14 @@ class WorksheetNotFoundError(GraphNotFoundError):
     always addresses an existing sheet — there is nothing sensible to create at a numeric
     position or an opaque id that doesn't exist.
     """
+
+
+class WorkbookNotFoundError(GraphNotFoundError):
+    """A path-mode ``workbook.path`` target doesn't exist and the caller opted out of creation.
+
+    Raised by :func:`client.excel_writer.resolve_workbook` when called with
+    ``create_if_missing=False`` (plan Task 8's ``getWorksheets``/``createWorksheet`` sync
+    actions — unlike row-run Excel mode and ``createWorkbook``, listing/creating a worksheet
+    should never have the side effect of silently creating the workbook it's supposed to
+    belong to).
+    """

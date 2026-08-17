@@ -91,14 +91,14 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
 - Verify: `pytest tests/test_excel_writer.py` green.
 
 ## Task 8 — Excel mode wiring + v1-parity sync actions · owner: component-develop
-- [ ] Excel mode in `run()` dispatch, gated off for `private_onedrive` (`UserException`); empty CSV
+- [x] Excel mode in `run()` dispatch, gated off for `private_onedrive` (`UserException`); empty CSV
   input → warning + exit 0, sheet untouched.
-- [ ] Sync actions with byte-compatible v1 output shapes: `search` (`{"file": {...}}`/
+- [x] Sync actions with byte-compatible v1 output shapes: `search` (`{"file": {...}}`/
   `{"file": null}`), `createWorkbook` (`{"file": {driveId, fileId}}`, exists → UserException
   "already exists"), `createWorksheet` (`{"worksheet": {...}}`), `getWorksheets` (position-sorted,
   `" (hidden)"` title suffix, ASCII header normalization: NFD strip, non-`[A-Za-z0-9-.]` → `_`,
   blanks `column-{i+1}`, duplicates `-1`/`-2`).
-- [ ] Golden tests against v1 expected-stdout fixtures (copied from `keboola/wr-onedrive`
+- [x] Golden tests against v1 expected-stdout fixtures (copied from `keboola/wr-onedrive`
   `tests/datadir/*/expected-stdout`).
 - Verify: golden tests green.
 

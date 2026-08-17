@@ -44,9 +44,11 @@ from client.exceptions import (
     InvalidWorkbookFormatError,
     InvalidWorkbookPathError,
     MultipleSitesFoundError,
+    WorkbookNotFoundError,
     WorksheetNotFoundError,
 )
 from client.graph_client import GraphClient
+from client.headers import normalize_header_row
 from client.uploader import encode_path_segments, ensure_folder, upload_file, validate_path
 from configuration import Account, AccountType, Workbook, Worksheet
 
@@ -160,16 +162,25 @@ def _format_range_address(start_col: int, start_row: int, end_col: int, end_row:
 # ---------------------------------------------------------------------------------------------
 
 
-def resolve_workbook(client: GraphClient, account: Account, workbook: Workbook) -> tuple[str, str, bool]:
+def resolve_workbook(
+    client: GraphClient, account: Account, workbook: Workbook, *, create_if_missing: bool = True
+) -> tuple[str, str, bool]:
     """Resolve ``workbook`` to a concrete ``(drive_id, file_id, created)``.
 
     ``created`` is ``True`` only when a path-mode target didn't exist yet and a minimal empty
     workbook was uploaded in its place (never for ``driveId``+``fileId`` or sharing-link
     targeting — see :func:`_resolve_by_ids` / :func:`_resolve_sharing_link`).
+
+    ``create_if_missing`` (default ``True``, matching row-run Excel mode and the
+    ``createWorkbook`` sync action) controls what happens when a path-mode target doesn't exist:
+    when ``False`` (plan Task 8's ``getWorksheets``/``createWorksheet`` sync actions), a missing
+    workbook raises :class:`~client.exceptions.WorkbookNotFoundError` instead of being silently
+    created — listing or adding a worksheet should never have the side effect of conjuring the
+    workbook it's supposed to belong to.
     """
     if workbook.path is None:
         return _resolve_by_ids(client, workbook)
-    return _resolve_by_path(client, account, workbook.path)
+    return _resolve_by_path(client, account, workbook.path, create_if_missing=create_if_missing)
 
 
 def _resolve_by_ids(client: GraphClient, workbook: Workbook) -> tuple[str, str, bool]:
@@ -189,44 +200,75 @@ def _resolve_by_ids(client: GraphClient, workbook: Workbook) -> tuple[str, str, 
     return workbook.drive_id, workbook.file_id, False
 
 
-def _resolve_by_path(client: GraphClient, account: Account, path: str) -> tuple[str, str, bool]:
+def _resolve_by_path(
+    client: GraphClient, account: Account, path: str, *, create_if_missing: bool
+) -> tuple[str, str, bool]:
     if _SHARING_LINK_RE.match(path):
-        return _resolve_sharing_link(client, path)
+        item = _fetch_sharing_link_item(client, path)
+        return item["parentReference"]["driveId"], item["id"], False
 
     business = account.account_type != AccountType.PRIVATE_ONEDRIVE
+    drive_id, relative_path, _prefix = _parse_workbook_path(client, path)
+    return _get_or_create_workbook_item(
+        client, drive_id, relative_path, business, path=path, create_if_missing=create_if_missing
+    )
 
+
+def _parse_workbook_path(client: GraphClient, path: str) -> tuple[str, str, list[str]]:
+    """Parse a ``drive://``/``site://``/root-relative ``workbook.path`` into its API drive.
+
+    Returns ``(drive_id, relative_path, v1_path_prefix)`` — ``v1_path_prefix`` is v1's
+    :class:`~Api\\Model\\File` breadcrumb prefix for each targeting form (``[]`` for
+    ``drive://``, ``["sites", siteName]`` for ``site://``, ``["my"]`` for a root-relative path),
+    consumed only by :func:`search_workbook` (byte-compatible with v1's ``search`` sync action
+    output — the "path" field in ``{"file": {...}}``). Sharing links are handled by the caller
+    *before* this is reached (they never carry a v1 prefix, and their target drive comes from
+    the resolved driveItem itself, not a ``GET /me/drive`` or ``GET /sites/{id}/drive`` call).
+    """
     drive_match = _DRIVE_PATH_RE.match(path)
     site_match = _SITE_PATH_RE.match(path)
     root_match = _ROOT_PATH_RE.match(path)
 
     if drive_match:
-        drive_id = unquote(drive_match.group(1))
-        relative_path = drive_match.group(2)
-    elif site_match:
+        return unquote(drive_match.group(1)), drive_match.group(2), []
+    if site_match:
         site_name = unquote(site_match.group(1))
-        relative_path = site_match.group(2)
         site_id = _resolve_site_id(client, site_name)
         drive_id = client.get(f"/sites/{site_id}/drive").json()["id"]
-    elif root_match:
-        relative_path = root_match.group(1)
+        return drive_id, site_match.group(2), ["sites", site_name]
+    if root_match:
         drive_id = client.get("/me/drive").json()["id"]
-    else:
-        raise InvalidWorkbookPathError(f'Unexpected path format for workbook.path: "{path}".')
-
-    return _get_or_create_workbook_item(client, drive_id, relative_path, business)
+        return drive_id, root_match.group(1), ["my"]
+    raise InvalidWorkbookPathError(f'Unexpected path format for workbook.path: "{path}".')
 
 
-def _resolve_sharing_link(client: GraphClient, link: str) -> tuple[str, str, bool]:
+def _fetch_sharing_link_item(client: GraphClient, link: str) -> dict:
+    """Resolve an ``https://`` sharing link to its driveItem (id, name, parentReference, ...).
+
+    v1 parity: truncates the link to 32 characters (with a trailing ``"..."`` regardless of
+    whether truncation actually happened — v1's own quirk, ``substr($url, 0, 32) . '...'``) in
+    the not-found/access-denied message.
+    """
     encoded = _encode_sharing_link(link)
     try:
         item = client.get(f"/shares/{encoded}/driveItem", params={"$select": WORKBOOK_ITEM_SELECT}).json()
     except GraphClientError as exc:
         raise GraphNotFoundError(
-            f'The sharing link "{link}" not exists, or you do not have permission to access it.',
+            f'The sharing link "{_truncate_link(link)}" not exists, or you do not have permission '
+            "to access it.",
             status_code=exc.status_code,
             error_code=exc.error_code,
         ) from exc
     _check_xlsx_mime(item)
+    return item
+
+
+def _truncate_link(link: str, max_length: int = 32) -> str:
+    return f"{link[:max_length]}..."
+
+
+def _resolve_sharing_link(client: GraphClient, link: str) -> tuple[str, str, bool]:
+    item = _fetch_sharing_link_item(client, link)
     return item["parentReference"]["driveId"], item["id"], False
 
 
@@ -251,14 +293,18 @@ def _resolve_site_id(client: GraphClient, site_name: str) -> str:
 
 
 def _get_or_create_workbook_item(
-    client: GraphClient, drive_id: str, relative_path: str, business: bool
+    client: GraphClient, drive_id: str, relative_path: str, business: bool, *, path: str, create_if_missing: bool
 ) -> tuple[str, str, bool]:
     encoded_path = encode_path_segments(relative_path)
     try:
         item = client.get(
             f"/drives/{drive_id}/root:/{encoded_path}", params={"$select": WORKBOOK_ITEM_SELECT}
         ).json()
-    except GraphNotFoundError:
+    except GraphNotFoundError as exc:
+        if not create_if_missing:
+            raise WorkbookNotFoundError(
+                f'Workbook not found for path "{path}".', status_code=exc.status_code, error_code=exc.error_code
+            ) from exc
         item = _create_empty_workbook(client, drive_id, relative_path, business)
         return drive_id, item["id"], True
     _check_xlsx_mime(item)
@@ -286,6 +332,71 @@ def _check_xlsx_mime(item: dict) -> None:
     mime_type = (item.get("file") or {}).get("mimeType")
     if mime_type != XLSX_MIME_TYPE:
         raise InvalidWorkbookFormatError(f'File is not in the "XLSX" Excel format. Mime type: "{mime_type}"')
+
+
+# ---------------------------------------------------------------------------------------------
+# `search` sync action (plan Task 8, design spec §5) — read-only workbook lookup by path
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WorkbookSearchResult:
+    """A found workbook, shaped for the ``search`` sync action's ``{"file": {...}}`` output."""
+
+    drive_id: str
+    file_id: str
+    name: str
+    path: str | None
+
+
+def search_workbook(client: GraphClient, account: Account, path: str) -> WorkbookSearchResult | None:
+    """Resolve ``path`` to an existing workbook without ever creating one (v1's ``search`` action).
+
+    Returns ``None`` when a ``drive://``/``site://``/root-relative path is well-formed but no
+    item exists there (the sync action's ``{"file": null}`` shape) — an unrecognized path format
+    still raises :class:`~client.exceptions.InvalidWorkbookPathError`, and an inaccessible/
+    nonexistent ``https://`` sharing link still raises (v1 parity: a bad sharing link is always a
+    configuration error, never a silent "not found").
+    """
+    if _SHARING_LINK_RE.match(path):
+        item = _fetch_sharing_link_item(client, path)
+        return WorkbookSearchResult(
+            drive_id=item["parentReference"]["driveId"],
+            file_id=item["id"],
+            name=item["name"],
+            path=_format_path_segments(item, []),
+        )
+
+    drive_id, relative_path, prefix = _parse_workbook_path(client, path)
+    encoded_path = encode_path_segments(relative_path)
+    try:
+        item = client.get(
+            f"/drives/{drive_id}/root:/{encoded_path}", params={"$select": WORKBOOK_ITEM_SELECT}
+        ).json()
+    except GraphNotFoundError:
+        return None
+    _check_xlsx_mime(item)
+    return WorkbookSearchResult(
+        drive_id=drive_id, file_id=item["id"], name=item["name"], path=_format_path_segments(item, prefix)
+    )
+
+
+def _format_path_segments(item: dict, prefix: list[str]) -> str | None:
+    """v1's ``File::from``/``jsonSerialize`` "path" breadcrumb: ``prefix`` + parent folder segments.
+
+    ``item["parentReference"]["path"]`` is Graph's ``"/drives/{id}/root:/folder/sub"``-style
+    string (present only when the item isn't at the drive root); v1 takes everything after the
+    literal ``"root:/"`` marker and explodes it on ``/`` — no percent-decoding, matched here for
+    byte parity. ``None`` (not ``""``) when there are no segments at all (v1:
+    ``$this->path ? implode('/', $this->path) : null``).
+    """
+    segments = list(prefix)
+    parent_path = (item.get("parentReference") or {}).get("path")
+    if parent_path and "root:/" in parent_path:
+        after_root = parent_path.split("root:/", 1)[1]
+        if after_root:
+            segments.extend(after_root.split("/"))
+    return "/".join(segments) if segments else None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -455,6 +566,59 @@ def _rename_worksheet(
     client.patch(url, json={"name": new_name}, headers=headers, retry_transient_workbook=True)
 
 
+def _read_header_row(client: GraphClient, drive_id: str, file_id: str, worksheet_id: str, headers: dict) -> list[str]:
+    """Read a worksheet's first-row cell values (as strings), via ``usedRange``'s row 0.
+
+    Shared by :func:`_prepare_append` (decides whether an append target already has a header)
+    and :func:`list_worksheets_with_headers` (the ``getWorksheets`` sync action's per-sheet
+    ``header`` field) — both need the exact same raw cell values before applying their own,
+    different, follow-up logic (a mismatch warning vs. v1's ASCII normalization).
+
+    Graph still returns a one-cell row (``text: [[""]]``) for a genuinely empty worksheet rather
+    than erroring, so this never raises for "no data yet" — callers see ``[""]``, not ``[]``, and
+    decide for themselves what "empty" means for their purpose.
+    """
+    base_url = _worksheet_base_url(drive_id, file_id, worksheet_id)
+    header_row = client.get(
+        f"{base_url}/range/usedRange(valuesOnly=true)/row(row=0)",
+        params={"$select": "address,text"},
+        headers=headers,
+        retry_transient_workbook=True,
+    ).json()
+    text_rows = header_row.get("text") or []
+    return [str(cell) for cell in text_rows[0]] if text_rows else []
+
+
+def list_worksheets_with_headers(client: GraphClient, drive_id: str, file_id: str) -> list[dict]:
+    """List every worksheet in a workbook with its normalized header (``getWorksheets``, §5).
+
+    Sessionless (sync actions never open a workbook session — v1 doesn't either) and
+    position-sorted, matching v1's ``Api::getSheets`` output shape exactly (field names, ``"
+    (hidden)"`` title suffix, ASCII-normalized ``header`` via :mod:`client.headers`).
+    """
+    worksheets = _list_worksheets(client, drive_id, file_id, headers={})
+    worksheets.sort(key=lambda item: item["position"])
+
+    result: list[dict] = []
+    for item in worksheets:
+        header_cells = _read_header_row(client, drive_id, file_id, item["id"], headers={})
+        visible = str(item.get("visibility", "")).lower() == "visible"
+        name = item["name"]
+        result.append(
+            {
+                "position": item["position"],
+                "name": name,
+                "title": name if visible else f"{name} (hidden)",
+                "driveId": drive_id,
+                "fileId": file_id,
+                "worksheetId": item["id"],
+                "visible": visible,
+                "header": normalize_header_row(header_cells),
+            }
+        )
+    return result
+
+
 # ---------------------------------------------------------------------------------------------
 # Write algorithm (port of v1's InsertRowsManager)
 # ---------------------------------------------------------------------------------------------
@@ -558,14 +722,7 @@ def _prepare_append(
     ).json()
     range_info = parse_range_address(used_range["address"])
 
-    header_row = client.get(
-        f"{base_url}/range/usedRange(valuesOnly=true)/row(row=0)",
-        params={"$select": "address,text"},
-        headers=headers,
-        retry_transient_workbook=True,
-    ).json()
-    text_rows = header_row.get("text") or []
-    existing_header = [str(cell) for cell in text_rows[0]] if text_rows else []
+    existing_header = _read_header_row(client, drive_id, file_id, worksheet_id, headers)
 
     if not any(cell.strip() for cell in existing_header):
         logger.info("Sheet is empty.")
