@@ -195,6 +195,9 @@ def ensure_folder(client: GraphClient, drive_id: str, folder_path: str) -> str:
 
         parent_id = _create_or_reget_folder(client, drive_id, parent_id, segment, encoded_path)
 
+    # `segments` is non-empty here (the empty case returns above), so the loop always runs at
+    # least once and `parent_id` is always set by the time we get here.
+    assert parent_id is not None
     return parent_id
 
 
