@@ -103,16 +103,20 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
 - Verify: golden tests green.
 
 ## Task 9 — configSchema + configRowSchema + uiOptions · owner: component-build-ui
-- [ ] Root schema: account section (`account_type` enum + `enum_titles`, `tenant_id`/`site_url`
+- [x] Root schema: account section (`account_type` enum + `enum_titles`, `tenant_id`/`site_url`
   via `options.dependencies`), test-connection widget. Row schema: `mode` selector; destination
   section (async `listLibraries` select with `enum: []` + autoload, folder path, conflict
-  behavior); CSV section and Excel section shown via `options.dependencies` on `mode`; Excel
-  workbook/worksheet pickers wired to `search`/`getWorksheets`/`createWorkbook`/`createWorksheet`.
-  Title Case titles, sentence-case descriptions, tooltips for long help, grid sections.
-- [ ] `component_config/uiOptions.md` → `["genericDockerUI", "genericDockerUI-rows",
+  behavior); CSV section and Excel section shown via `options.dependencies` on `mode`. Deviation
+  (documented in the Task 9 report/commit): `search`/`getWorksheets`/`createWorkbook`/
+  `createWorksheet` return custom v1-parity object shapes, not `SelectElement` lists — the generic
+  Docker UI's async-select/button widgets can't consume them, so workbook/worksheet fields stay
+  plain text inputs with tooltips explaining id/path/position precedence instead of inventing
+  unsupported widget wiring. Title Case titles, sentence-case descriptions, tooltips for long help,
+  grid sections.
+- [x] `component_config/uiOptions.md` → `["genericDockerUI", "genericDockerUI-rows",
   "genericDockerUI-authorization", "genericDockerUI-tableInput", "genericDockerUI-fileInput"]`
   (exact set confirmed against portal docs during the task).
-- [ ] Update `component_config/*description*.md` (what the component does, per portal conventions)
+- [x] Update `component_config/*description*.md` (what the component does, per portal conventions)
   and `data/config.json` sample to the real schema.
 - Verify: schema lints (JSON valid, every `options.async.action` has a matching `@sync_action`,
   async selects have `enum: []`, required arrays parent-level); schema-tester if available.

@@ -1,19 +1,76 @@
 {
   "type": "object",
-  "title": "extractor configuration",
+  "title": "OneDrive/SharePoint Writer — Account",
   "required": [
-    "print_hello"
+    "account"
   ],
   "properties": {
-    "print_hello": {
-      "type": "boolean",
-      "title": "Print Hello",
-      "propertyOrder": 1
+    "account": {
+      "type": "object",
+      "title": "Account",
+      "format": "grid",
+      "propertyOrder": 1,
+      "required": [
+        "account_type"
+      ],
+      "properties": {
+        "account_type": {
+          "type": "string",
+          "title": "Account Type",
+          "description": "Type of Microsoft account this configuration connects to",
+          "enum": [
+            "private_onedrive",
+            "onedrive_for_business",
+            "sharepoint"
+          ],
+          "options": {
+            "enum_titles": [
+              "Private OneDrive",
+              "OneDrive for Business",
+              "SharePoint"
+            ]
+          },
+          "propertyOrder": 1
+        },
+        "tenant_id": {
+          "type": "string",
+          "title": "Tenant ID",
+          "description": "Azure AD tenant ID that owns the account",
+          "options": {
+            "tooltip": "Find it in the Azure Portal under Azure Active Directory → Overview → Tenant ID. Required for OneDrive for Business and SharePoint accounts.",
+            "dependencies": {
+              "account_type": [
+                "onedrive_for_business",
+                "sharepoint"
+              ]
+            }
+          },
+          "propertyOrder": 2
+        },
+        "site_url": {
+          "type": "string",
+          "title": "Site URL",
+          "description": "Full URL of the SharePoint site to connect to",
+          "options": {
+            "tooltip": "Example: https://contoso.sharepoint.com/sites/DataTeam. Copy it from the address bar while browsing the site.",
+            "dependencies": {
+              "account_type": "sharepoint"
+            }
+          },
+          "propertyOrder": 3
+        }
+      }
     },
-    "debug": {
-      "type": "boolean",
-      "title": "Debug",
-      "propertyOrder": 2
+    "test_connection": {
+      "type": "button",
+      "format": "test-connection",
+      "propertyOrder": 2,
+      "options": {
+        "async": {
+          "label": "Test Connection",
+          "action": "testConnection"
+        }
+      }
     }
   }
 }

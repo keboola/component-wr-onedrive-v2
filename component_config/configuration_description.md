@@ -1,1 +1,1 @@
-Configuration description.
+Configure the account once at the top level (account type, tenant ID and SharePoint site URL as needed) and authorize the connection via OAuth. Then add one row per destination: pick an output mode (file upload, table as CSV, or table as Excel worksheet), attach the row's input mapping (files or a single table), and fill in the mode-specific target fields — document library and folder for files/CSV, or workbook and worksheet for Excel.
