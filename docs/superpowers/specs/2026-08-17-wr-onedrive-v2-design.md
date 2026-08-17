@@ -41,8 +41,9 @@ Excel worksheet write semantics and sync-action contracts.
   under a `#`-prefixed state key so it's encrypted. No other secrets.
 - **Sync actions**: `testConnection`, `listLibraries`, plus v1-parity `search`, `getWorksheets`,
   `createWorkbook`, `createWorksheet` (section 5).
-- **Scratch files**: `/tmp` only — nothing is ever written under `data/out/` (everything there
-  would be uploaded to Storage).
+- **Scratch files**: `/tmp` only — never `data/out/tables/` or `data/out/files/` (everything there
+  is uploaded to Storage). The one legitimate `data/out/` write is `data/out/state.json`, for token
+  rotation.
 
 ## 3. Authentication & connection
 
