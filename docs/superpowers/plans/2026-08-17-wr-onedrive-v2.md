@@ -74,7 +74,7 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
 - Verify: `pytest` green; `run()` line count; scratch-path assertion.
 
 ## Task 7 — Excel writer · owner: component-develop
-- [ ] `src/client/excel_writer.py`: workbook resolution for all v1 path forms (`/path`,
+- [x] `src/client/excel_writer.py`: workbook resolution for all v1 path forms (`/path`,
   `drive://{driveId}/path`, `site://{siteName}/path` via `GET /sites?search=` requiring exactly one
   hit, `https://` sharing link via `/shares/u!{base64url}`), XLSX MIME check; create-when-missing
   only in path mode (upload minimal valid xlsx built with openpyxl at build time or bundled
@@ -86,7 +86,7 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
   batched `PATCH .../range(address=...)` with `batch_size` rows, fixed column count from CSV
   header, formula escaping (`=` → `'=`), multi-letter column addressing; serialized writes (no
   concurrency).
-- [ ] Unit tests: address math, path-form parsing, header skip semantics, escaping, batching
+- [x] Unit tests: address math, path-form parsing, header skip semantics, escaping, batching
   boundaries (mocked HTTP).
 - Verify: `pytest tests/test_excel_writer.py` green.
 

@@ -77,3 +77,39 @@ class UploadSessionError(GraphClientError):
     ``nameAlreadyExists`` under ``conflict_behavior`` ``replace``/``rename`` (Graph provides no
     server-side replace/rename recovery for chunked uploads — the caller must retry the job).
     """
+
+
+class InvalidWorkbookPathError(GraphClientError):
+    """``workbook.path`` doesn't match any supported v1 targeting form.
+
+    Raised by :mod:`client.excel_writer` when a path is neither ``/root-relative``,
+    ``drive://{driveId}/...``, ``site://{siteName}/...``, nor an ``https://`` sharing link, or
+    when a ``site://`` name resolves to zero SharePoint sites (see
+    :class:`MultipleSitesFoundError` for the "more than one" case) or an ``https://`` sharing
+    link can't be resolved to a driveItem.
+    """
+
+
+class MultipleSitesFoundError(GraphClientError):
+    """A ``site://{siteName}`` workbook path's ``GET /sites?search=`` matched more than one site.
+
+    v1 parity: a name search must resolve unambiguously; the user needs a more specific name (or
+    ``workbook.drive_id``/``workbook.file_id`` targeting) instead.
+    """
+
+
+class InvalidWorkbookFormatError(GraphClientError):
+    """The resolved workbook driveItem's ``file.mimeType`` isn't the XLSX content type.
+
+    Raised regardless of how the workbook was targeted (ids, any path form, or a sharing link) —
+    Excel mode only ever writes ``.xlsx`` files.
+    """
+
+
+class WorksheetNotFoundError(GraphNotFoundError):
+    """``worksheet.id`` or ``worksheet.position`` doesn't match any worksheet in the workbook.
+
+    Unlike name-mode targeting (which creates a missing sheet, v1 parity), id/position targeting
+    always addresses an existing sheet — there is nothing sensible to create at a numeric
+    position or an opaque id that doesn't exist.
+    """

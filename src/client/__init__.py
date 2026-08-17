@@ -4,8 +4,8 @@ Sub-modules:
     auth            OAuth token acquisition/rotation (``TokenProvider``, ``RefreshTokenProvider``).
     graph_client    Session-based Graph HTTP client with retry policy, User-Agent, paging.
     exceptions      Typed Graph error taxonomy raised by ``graph_client``.
-    uploader        Drive file upload logic (added in a later task).
-    excel_writer    Excel worksheet write logic (added in a later task).
+    uploader        Drive file upload logic (path validation, folder resolution, chunked upload).
+    excel_writer    Excel worksheet write logic (workbook/session/worksheet resolution, batched writes).
 """
 
 from client.auth import AuthenticationError, RefreshTokenProvider, TokenProvider
