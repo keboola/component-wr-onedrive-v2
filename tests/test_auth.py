@@ -268,6 +268,46 @@ class TestAllCandidatesFail:
         assert session.post.call_count == 1
 
 
+class TestInvalidate:
+    def test_invalidate_forces_refresh_on_next_call_even_before_expiry(self):
+        clock = FakeClock(start=0.0)
+        session = MagicMock()
+        session.post.side_effect = [
+            _make_response(200, _token_payload(access_token="access-1")),
+            _make_response(200, _token_payload(access_token="access-2")),
+        ]
+        provider = RefreshTokenProvider(
+            client_id="client-1",
+            client_secret="secret-1",
+            authority="common",
+            refresh_token_candidates=["refresh-config"],
+            session=session,
+            clock=clock,
+        )
+
+        first_token = provider.get_access_token()
+        provider.invalidate()
+        # Clock hasn't advanced at all -> without invalidate() this would be a cache hit.
+        second_token = provider.get_access_token()
+
+        assert first_token == "access-1"
+        assert second_token == "access-2"
+        assert session.post.call_count == 2
+
+    def test_invalidate_before_any_refresh_is_a_noop(self):
+        provider = RefreshTokenProvider(
+            client_id="client-1",
+            client_secret="secret-1",
+            authority="common",
+            refresh_token_candidates=["refresh-config"],
+            session=MagicMock(),
+        )
+
+        provider.invalidate()
+
+        assert provider.rotated_refresh_token is None
+
+
 class TestProactiveRefresh:
     def test_refreshes_again_after_expiry_elapses(self):
         clock = FakeClock(start=0.0)

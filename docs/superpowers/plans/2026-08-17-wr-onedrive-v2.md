@@ -41,11 +41,11 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
 - Verify: `pytest tests/test_graph_client.py` green.
 
 ## Task 4 — Site/drive resolution + testConnection/listLibraries · owner: component-develop
-- [ ] Client methods: site URL → site id (`GET /sites/{hostname}:{path}`), list drives
+- [x] Client methods: site URL → site id (`GET /sites/{hostname}:{path}`), list drives
   (`GET /sites/{site-id}/drives`), account-type dispatch to base drive (`/me/drive` vs site drive).
   Do NOT port the extractor's doubled `/sites/{id}/sites/{id}/lists` path; drive id is the
   canonical library identifier.
-- [ ] `src/component.py`: `@sync_action("testConnection")` (`GET /me?$select=userPrincipalName`),
+- [x] `src/component.py`: `@sync_action("testConnection")` (`GET /me?$select=userPrincipalName`),
   `@sync_action("listLibraries")` → `SelectElement(label=name, value=drive.id)`, built from root
   config only.
 - Verify: unit tests for dispatch + sync-action shapes; `ruff check` clean.

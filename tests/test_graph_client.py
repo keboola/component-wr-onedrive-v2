@@ -229,6 +229,37 @@ class TestUnauthorizedRetry:
         second_call_headers = session.request.call_args_list[1].kwargs["headers"]
         assert second_call_headers["Authorization"] == "Bearer token-new"
 
+    def test_401_invalidates_token_provider_before_retrying(self):
+        """The 401 path must call `invalidate()` so a provider's own cache can't hand back the
+        same rejected token on retry — this is what actually makes `get_access_token`'s second
+        call return something different, not just a mock configured to do so."""
+        session = MagicMock()
+        session.request.side_effect = [
+            _response(401, _error_body("InvalidAuthenticationToken", "expired")),
+            _response(200, {"ok": True}),
+        ]
+        provider = MagicMock()
+        provider.get_access_token.side_effect = ["token-old", "token-new"]
+        client = _client(session=session, token_provider=provider)
+
+        client.get("/me")
+
+        provider.invalidate.assert_called_once()
+        # invalidate() must happen strictly between the two get_access_token() calls.
+        call_order = [call[0] for call in provider.method_calls]
+        assert call_order == ["get_access_token", "invalidate", "get_access_token"]
+
+    def test_401_does_not_invalidate_when_auth_is_false(self):
+        session = MagicMock()
+        session.request.return_value = _response(401, _error_body("InvalidAuthenticationToken", "expired"))
+        provider = MagicMock()
+        client = _client(session=session, token_provider=provider)
+
+        with pytest.raises(GraphPermissionError):
+            client.put("https://upload.example/session-url", absolute=True, auth=False)
+
+        provider.invalidate.assert_not_called()
+
     def test_401_persisting_after_retry_raises_permission_error(self):
         session = MagicMock()
         session.request.return_value = _response(401, _error_body("InvalidAuthenticationToken", "still bad"))

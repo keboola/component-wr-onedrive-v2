@@ -208,6 +208,7 @@ class GraphClient:
             if status == 401 and auth and not retried_401:
                 logger.info("Graph request returned 401; re-fetching the access token and retrying once.")
                 retried_401 = True
+                self._token_provider.invalidate()
                 continue
 
             if self._is_retryable(status, retry_transient_workbook):

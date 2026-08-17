@@ -74,6 +74,15 @@ class TokenProvider(ABC):
         docstring for the exact state payload shape) so the next run doesn't need to reauthorize.
         """
 
+    def invalidate(self) -> None:
+        """Discard any cached access token so the next :meth:`get_access_token` call refreshes.
+
+        Called by ``GraphClient`` right before its single 401-triggered retry, so a stale
+        cached token can't make that retry fail identically. Default is a no-op — a provider
+        with nothing cached (e.g. a future stateless service-principal provider, CFTL-702) has
+        nothing to discard.
+        """
+
 
 @dataclass
 class _TokenState:
@@ -156,6 +165,16 @@ class RefreshTokenProvider(TokenProvider):
     @property
     def rotated_refresh_token(self) -> str | None:
         return self._state.refresh_token if self._state is not None else None
+
+    def invalidate(self) -> None:
+        """Drop the cached access token so the next :meth:`get_access_token` call refreshes.
+
+        Used by ``GraphClient``'s 401-retry path: a 401 means the cached access token Graph just
+        rejected is no longer trustworthy, even if it isn't "stale" by our own expiry bookkeeping
+        (e.g. it was revoked out-of-band). Clearing ``_state`` forces ``get_access_token`` to call
+        ``_refresh`` again instead of handing back the same rejected token.
+        """
+        self._state = None
 
     def _refresh(self) -> None:
         last_error: Exception | None = None
