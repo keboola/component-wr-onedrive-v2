@@ -49,3 +49,31 @@ class GraphRateLimitCapExceededError(GraphClientError):
     or when the cumulative wait across several retries exhausts it. Always user-facing: Graph is
     actively throttling the app, and hammering it further only burns more quota.
     """
+
+
+class InvalidPathError(GraphClientError):
+    """A destination path/placeholder/segment is invalid — raised client-side, pre-network.
+
+    Covers unknown ``{...}`` placeholders in ``destination.folder_path``, Graph's reserved
+    characters/names, and the 255-char segment / 400-char total path limits (design spec §4
+    "Mechanics of the in-scope surface" — Path/naming). Never carries a ``status_code``: nothing
+    was sent to Graph yet.
+    """
+
+
+class FileAlreadyExistsError(GraphClientError):
+    """409 ``nameAlreadyExists`` with ``conflict_behavior='fail'`` — a clean, user-facing conflict.
+
+    Raised by both the simple-PUT and upload-session paths in :mod:`client.uploader` when the
+    target file already exists and the row is configured not to replace or rename it.
+    """
+
+
+class UploadSessionError(GraphClientError):
+    """A chunked upload session could not be completed.
+
+    Covers: resume attempts exhausted after repeated transient chunk failures, a session that
+    expired (404) immediately after already being restarted once, and a late final-chunk 409
+    ``nameAlreadyExists`` under ``conflict_behavior`` ``replace``/``rename`` (Graph provides no
+    server-side replace/rename recovery for chunked uploads — the caller must retry the job).
+    """

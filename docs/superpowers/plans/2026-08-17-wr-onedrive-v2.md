@@ -51,7 +51,7 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
 - Verify: unit tests for dispatch + sync-action shapes; `ruff check` clean.
 
 ## Task 5 — Drive uploader · owner: component-develop
-- [ ] `src/client/uploader.py`: path validation (reserved chars incl. `#%` on business, reserved
+- [x] `src/client/uploader.py`: path validation (reserved chars incl. `#%` on business, reserved
   names, 400/255 limits → `UserException` pre-network); per-segment URL encoding (colon syntax);
   date placeholders (`{date:%Y-%m-%d}`, UTC, resolved at run start); folder resolution + creation
   level-by-level (`POST /children`, `conflictBehavior` body key, tolerate existing); simple PUT
@@ -60,7 +60,7 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
   sequential 10 MiB chunks (32 × 320 KiB), no Authorization header on chunk PUTs, resume via
   `GET uploadUrl`/`nextExpectedRanges`, session 404 → single restart, `DELETE uploadUrl` on abort,
   final-chunk 409 `nameAlreadyExists` mapped per conflict behavior; streams from disk.
-- [ ] Unit tests: chunk math, placeholder resolution, validation, conflict mapping, resume logic
+- [x] Unit tests: chunk math, placeholder resolution, validation, conflict mapping, resume logic
   (mocked HTTP).
 - Verify: `pytest tests/test_uploader.py` green.
 
