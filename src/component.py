@@ -159,7 +159,8 @@ class Component(ComponentBase):
         """Upload the row's single input table as a CSV file (design spec §2/§6)."""
         table = self._require_single_input_table()
         parent_id, folder_path = self._resolve_destination_folder(config, client, drive_id, now)
-        file_name = config.csv.file_name or f"{table.name}.csv"
+        table_base_name = table.name.removesuffix(".csv")
+        file_name = config.csv.file_name or f"{table_base_name}.csv"
         upload_path, is_temp_file = self._prepare_csv_upload_source(table, config.csv)
         try:
             conflict_behavior = config.destination.conflict_behavior.value
