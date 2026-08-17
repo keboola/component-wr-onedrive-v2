@@ -32,12 +32,12 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
 - Verify: `pytest tests/test_auth.py` green.
 
 ## Task 3 — Graph client core · owner: component-develop
-- [ ] `src/client/graph_client.py`: `requests.Session`-based client; `Authorization` from
+- [x] `src/client/graph_client.py`: `requests.Session`-based client; `Authorization` from
   `TokenProvider`; `User-Agent: NONISV|Keboola|wr-onedrive-v2/<version>`; retry policy — honor
   `Retry-After` on 429/503, exponential backoff on 5xx, workbook-transient 405/409 opt-in per call,
   total-wait cap → `UserException`; no retry of non-idempotent chunk PUTs; `@odata.nextLink` paging
   helper; error mapping (401/403/404/507/400 → typed exceptions with response `error.code`/message).
-- [ ] Unit tests: Retry-After honored, cap exceeded → UserException, paging, error mapping.
+- [x] Unit tests: Retry-After honored, cap exceeded → UserException, paging, error mapping.
 - Verify: `pytest tests/test_graph_client.py` green.
 
 ## Task 4 — Site/drive resolution + testConnection/listLibraries · owner: component-develop
