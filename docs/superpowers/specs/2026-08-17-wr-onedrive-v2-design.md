@@ -2,7 +2,7 @@
 
 > Type: writer
 > Component ID: keboola.wr-onedrive-v2
-> Status: draft
+> Status: approved (user, 2026-08-17)
 > Date: 2026-08-17
 
 ## 1. Overview & source system
