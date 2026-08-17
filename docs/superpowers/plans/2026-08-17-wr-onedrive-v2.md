@@ -9,7 +9,7 @@
 Task status: `[ ]` open · `[x]` done (checked only after the task's verification passed).
 
 ## Task 1 — Configuration models · owner: component-develop
-- [ ] `src/configuration.py`: Pydantic v2 models per spec §5 — `Account` (explicit `account_type`
+- [x] `src/configuration.py`: Pydantic v2 models per spec §5 — `Account` (explicit `account_type`
   enum `private_onedrive|onedrive_for_business|sharepoint`, `tenant_id`, `site_url`, cross-field
   requiredness), `Destination` (`drive_id`, `folder_path`, `conflict_behavior` enum default `fail`),
   `CsvOptions` (`file_name`, `delimiter`, `enclosure`, `include_header`), `Workbook`
@@ -17,17 +17,17 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
   (`id` XOR `position`, optional `name`, str→int coercion for `position`, opaque `metadata`),
   `RowConfig` (`mode` enum, `append=False`, `batch_size=5000`). `extra="ignore"`, no `debug` field,
   explicit defaults, no `.parameters.get()` outside models.
-- [ ] Unit tests: XOR constraints, coercions, requiredness per account type, metadata passthrough.
+- [x] Unit tests: XOR constraints, coercions, requiredness per account type, metadata passthrough.
 - Verify: `pytest tests/test_configuration.py` green; `ruff check` clean.
 
 ## Task 2 — Token provider · owner: component-develop
-- [ ] `src/client/auth.py`: `TokenProvider` interface (swappable for CFTL-702) +
+- [x] `src/client/auth.py`: `TokenProvider` interface (swappable for CFTL-702) +
   `RefreshTokenProvider`: raw refresh-token grant against
   `login.microsoftonline.com/{common|tenant}/oauth2/v2.0/token`, proactive refresh before
   `expires_in` elapses, rotation (new refresh token captured), candidates tried state-first then
   config, `invalid_grant` on all candidates → `UserException` ("reauthorize"). State key
   `#refreshed_auth_data` (v1-compatible JSON payload).
-- [ ] Unit tests with mocked HTTP: refresh success, rotation, fallback order, invalid_grant,
+- [x] Unit tests with mocked HTTP: refresh success, rotation, fallback order, invalid_grant,
   proactive re-refresh.
 - Verify: `pytest tests/test_auth.py` green.
 

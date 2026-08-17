@@ -718,6 +718,7 @@ dependencies = [
     { name = "keboola-http-client" },
     { name = "keboola-utils" },
     { name = "pydantic" },
+    { name = "requests" },
 ]
 
 [package.dev-dependencies]
@@ -737,6 +738,7 @@ requires-dist = [
     { name = "keboola-http-client", specifier = ">=1.0.1" },
     { name = "keboola-utils", specifier = ">=1.1.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
+    { name = "requests", specifier = ">=2.32.0" },
 ]
 
 [package.metadata.requires-dev]
