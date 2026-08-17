@@ -65,12 +65,12 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
 - Verify: `pytest tests/test_uploader.py` green.
 
 ## Task 6 — File mode + CSV mode orchestration · owner: component-develop
-- [ ] `src/component.py`: thin `run()` (< 30 lines) — load merged config → token provider/client →
+- [x] `src/component.py`: thin `run()` (< 30 lines) — load merged config → token provider/client →
   dispatch on `mode` → persist rotated token to state (also on failure via `finally`). File mode:
   upload every file from the row's file input mapping to the target folder. CSV mode: exactly one
   input table (0/>1 → `UserException`, v1-parity messages); rewrite delimiter/enclosure/header only
   when options differ from Storage defaults (else stream the input file as-is); scratch in `/tmp`.
-- [ ] Datadir-style tests for both modes with mocked client.
+- [x] Datadir-style tests for both modes with mocked client.
 - Verify: `pytest` green; `run()` line count; scratch-path assertion.
 
 ## Task 7 — Excel writer · owner: component-develop
