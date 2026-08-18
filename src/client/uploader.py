@@ -36,6 +36,7 @@ from client.exceptions import (
     GraphNotFoundError,
     InvalidPathError,
     UploadSessionError,
+    sanitize_exception_text,
 )
 from client.graph_client import GraphClient
 
@@ -412,15 +413,22 @@ def _resume_after_failure(
         and exc.status_code not in _TRANSIENT_CHUNK_STATUSES
     ):
         _abort_session(client, upload_url)
-        raise UploadSessionError(f"Uploading '{file_name}' failed with a non-retryable error: {exc}") from exc
+        raise UploadSessionError(
+            f"Uploading '{file_name}' failed with a non-retryable error: {sanitize_exception_text(exc)}"
+        ) from exc
 
     if resume_attempts >= MAX_RESUME_ATTEMPTS:
         _abort_session(client, upload_url)
         raise UploadSessionError(
-            f"Uploading '{file_name}' failed after {MAX_RESUME_ATTEMPTS} resume attempts: {exc}"
+            f"Uploading '{file_name}' failed after {MAX_RESUME_ATTEMPTS} resume attempts: "
+            f"{sanitize_exception_text(exc)}"
         ) from exc
 
-    logger.warning("Chunk upload for '%s' failed transiently (%s); querying uploadUrl to resume.", file_name, exc)
+    logger.warning(
+        "Chunk upload for '%s' failed transiently (%s); querying uploadUrl to resume.",
+        file_name,
+        sanitize_exception_text(exc),
+    )
     try:
         status_response = client.get(upload_url, absolute=True, auth=False, retry=False)
     except GraphClientError as status_exc:

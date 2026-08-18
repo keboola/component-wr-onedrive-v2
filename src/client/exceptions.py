@@ -10,6 +10,9 @@ and testable on its own (same rule as ``auth.AuthenticationError``).
 """
 
 
+import re
+
+
 class GraphClientError(Exception):
     """Base class for every error raised while talking to Microsoft Graph.
 
@@ -140,3 +143,15 @@ class WorkbookNotFoundError(GraphNotFoundError):
     should never have the side effect of silently creating the workbook it's supposed to
     belong to).
     """
+
+
+_QUERY_STRING_RE = re.compile(r"\?[^\s'\"]+")
+
+
+def sanitize_exception_text(exc: BaseException) -> str:
+    """Exception text with URL query strings redacted.
+
+    Pre-signed URLs (e.g. upload-session ``tempauth`` tokens) can appear in
+    ``requests`` exception messages — never let them reach logs or error output.
+    """
+    return _QUERY_STRING_RE.sub("?<redacted>", str(exc))

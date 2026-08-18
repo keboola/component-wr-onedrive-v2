@@ -37,6 +37,7 @@ from client.exceptions import (
     GraphPermissionError,
     GraphQuotaExceededError,
     GraphRateLimitCapExceededError,
+    sanitize_exception_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -287,11 +288,12 @@ class GraphClient:
         """
         if not retry:
             raise GraphConnectionError(
-                f"A network error occurred while calling Microsoft Graph: {exc}. Please retry the job."
+                f"A network error occurred while calling Microsoft Graph: "
+                f"{sanitize_exception_text(exc)}. Please retry the job."
             ) from exc
         if attempt >= self._max_retry_attempts:
             raise GraphConnectionError(
-                f"A network error occurred while calling Microsoft Graph ({exc}) and the maximum of "
+                f"A network error occurred while calling Microsoft Graph ({sanitize_exception_text(exc)}) and the maximum of "
                 f"{self._max_retry_attempts} retry attempts was reached. Please retry the job later."
             ) from exc
 
@@ -299,7 +301,7 @@ class GraphClient:
         remaining = self._total_wait_cap_seconds - elapsed_wait
         if wait_seconds > remaining:
             raise GraphConnectionError(
-                f"A network error occurred while calling Microsoft Graph ({exc}) and the required "
+                f"A network error occurred while calling Microsoft Graph ({sanitize_exception_text(exc)}) and the required "
                 f"wait ({wait_seconds:.0f}s) exceeds the remaining retry budget ({remaining:.0f}s "
                 f"of {self._total_wait_cap_seconds:.0f}s total). Please retry the job later."
             ) from exc
