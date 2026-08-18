@@ -122,11 +122,18 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
   async selects have `enum: []`, required arrays parent-level); schema-tester if available.
 
 ## Task 10 — Datadir + unit test completion · owner: component-test
-- [ ] Datadir tests (merged single `config.json`, row-scoped state fixtures): happy path per mode;
+- [x] Datadir tests (merged single `config.json`, row-scoped state fixtures): happy path per mode;
   append vs overwrite; empty CSV; cardinality errors; missing OAuth; Excel-on-personal; conflict
-  `fail` on existing file. Expected exit codes asserted (1 vs 2).
-- Verify: full `pytest` suite green in the Docker `test` target (`docker compose` or
-  `scripts/build_n_test.sh`).
+  `fail` on existing file. Expected exit codes asserted (1 vs 2). Implemented in
+  `tests/test_functional_http.py`: the real `Component.run()` end-to-end with only the HTTP
+  transport mocked (`requests.Session.request`, realistic Graph JSON payloads) — see that file's
+  module docstring for why `keboola.datadirtest`'s `run_path`/`sys.exit` machinery was not used
+  (verified `SystemExit` inside one scenario would abort the whole batch, not just that case).
+  A dedicated subprocess test asserts the literal process exit code 1 for one scenario.
+- [x] Verify: full `pytest` suite green (295 pre-existing + 13 new = 308); `scripts/build_n_test.sh`
+  does not exist in this repo and the sandbox has no running Docker daemon (`docker compose build`
+  fails with "Cannot connect to the Docker daemon") — verified via `uv run pytest tests/ -q` and
+  `uv run ruff check .` instead; see the Task 10 report for detail.
 
 ## Task 11 — VCR harness + cassettes · owner: generate-vcr-tests / component-test
 - [ ] Greenfield VCR setup (extractor has none): record against the Keboola M365 test tenant —
