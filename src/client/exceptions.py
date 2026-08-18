@@ -45,9 +45,25 @@ class GraphBadRequestError(GraphClientError):
 class GraphRateLimitCapExceededError(GraphClientError):
     """The retry policy gave up instead of waiting past the configured total-wait cap.
 
-    Raised either when a single ``Retry-After`` value alone would exceed the remaining budget,
-    or when the cumulative wait across several retries exhausts it. Always user-facing: Graph is
-    actively throttling the app, and hammering it further only burns more quota.
+    Raised when a single ``Retry-After`` value alone would exceed the remaining budget, when the
+    cumulative wait across several retries exhausts it, or when the number of retry attempts hits
+    the hard per-request attempt cap regardless of cumulative wait (guards against a degenerate
+    ``Retry-After: 0`` loop, which would otherwise never accumulate enough wait time to trip the
+    budget check). Always user-facing: Graph is actively throttling the app, and hammering it
+    further only burns more quota.
+    """
+
+
+class GraphConnectionError(GraphClientError):
+    """A network-level failure talking to Microsoft Graph (connection error, timeout, DNS, ...).
+
+    Raised when the underlying ``requests`` call itself fails before any HTTP response is ever
+    received — i.e. ``requests.RequestException`` was raised at the transport boundary
+    (:meth:`~client.graph_client.GraphClient.request`). Treated as a transient condition: retried
+    under the same backoff policy as a 5xx response when ``retry=True``, raised immediately when
+    ``retry=False``, and raised once the retry budget (cumulative wait or attempt cap) is
+    exhausted. Never carries a ``status_code`` — nothing was ever received from Graph. Always
+    user-facing: the job can typically just be retried.
     """
 
 

@@ -8,9 +8,16 @@ strategy (not the three overlapping layers the sibling extractor had): 429/503 h
 ``Retry-After`` (falling back to exponential backoff when the header is absent), 500/502/504
 always use exponential backoff, and 405/409 ("workbook transient" — Excel's
 ``EditModeCannotAcquireLockTooManyRequests``-style codes) are retried only when the caller opts
-in per call. A total-wait cap bounds how long any single logical request will keep retrying;
-once it would be exceeded, :class:`~client.exceptions.GraphRateLimitCapExceededError` is raised
-rather than retrying forever. All durations here are in seconds throughout — the extractor's
+in per call. A connection-level failure (``requests.RequestException`` — connection error,
+timeout, DNS failure; no HTTP response was ever received) is treated the same as a 5xx: retried
+with the same exponential backoff when ``retry=True``, raised immediately as
+:class:`~client.exceptions.GraphConnectionError` when ``retry=False``. A total-wait cap bounds
+how long any single logical request will keep retrying, and a hard cap on the number of retry
+attempts guards against a degenerate ``Retry-After: 0`` loop that would never accumulate enough
+wait time to trip the wait-cap check; once either would be exceeded,
+:class:`~client.exceptions.GraphRateLimitCapExceededError` (or
+:class:`~client.exceptions.GraphConnectionError` for connection-error retries) is raised rather
+than retrying forever. All durations here are in seconds throughout — the extractor's
 seconds-vs-milliseconds bug is not repeated.
 """
 
@@ -25,6 +32,7 @@ from client.auth import TokenProvider
 from client.exceptions import (
     GraphBadRequestError,
     GraphClientError,
+    GraphConnectionError,
     GraphNotFoundError,
     GraphPermissionError,
     GraphQuotaExceededError,
@@ -50,6 +58,12 @@ _BACKOFF_MAX_SECONDS = 60.0
 # Total time (seconds) a single logical request is allowed to spend sleeping between retries
 # before giving up with a user-facing error. Overridable per `GraphClient` instance.
 DEFAULT_TOTAL_WAIT_CAP_SECONDS = 300.0
+
+# Hard cap on the number of retry attempts for a single logical request, regardless of how much
+# of the cumulative-wait budget those attempts would consume. Without this, a server that keeps
+# responding `Retry-After: 0` (or an equivalent always-immediate 5xx) would retry forever, since
+# each retry adds ~0s to `elapsed_wait` and never trips the total-wait-cap check above.
+MAX_RETRY_ATTEMPTS = 15
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
@@ -116,6 +130,7 @@ class GraphClient:
         session: requests.Session | None = None,
         base_url: str = BASE_URL,
         total_wait_cap_seconds: float = DEFAULT_TOTAL_WAIT_CAP_SECONDS,
+        max_retry_attempts: int = MAX_RETRY_ATTEMPTS,
         sleep_fn: Callable[[float], None] | None = None,
     ):
         """
@@ -125,7 +140,12 @@ class GraphClient:
                 otherwise.
             base_url: Graph API root; overridable for tests.
             total_wait_cap_seconds: maximum cumulative sleep time across retries for a single
-                logical request before giving up with :class:`GraphRateLimitCapExceededError`.
+                logical request before giving up with :class:`GraphRateLimitCapExceededError` (or
+                :class:`GraphConnectionError` for connection-error retries).
+            max_retry_attempts: maximum number of retry attempts for a single logical request,
+                regardless of cumulative wait — guards against a degenerate ``Retry-After: 0``
+                loop that would otherwise never trip ``total_wait_cap_seconds``. Overridable for
+                tests.
             sleep_fn: injectable sleep function (tests only). When ``None``, ``time.sleep`` is
                 resolved dynamically on each call, so ``unittest.mock.patch("time.sleep")`` (or
                 patching ``client.graph_client.time.sleep``) works without needing this argument.
@@ -134,6 +154,7 @@ class GraphClient:
         self._session = session if session is not None else requests.Session()
         self._base_url = base_url.rstrip("/")
         self._total_wait_cap_seconds = total_wait_cap_seconds
+        self._max_retry_attempts = max_retry_attempts
         self._sleep_fn = sleep_fn
 
     def request(
@@ -178,7 +199,12 @@ class GraphClient:
             client.exceptions.GraphClientError (or a typed subclass): on any error response
                 that isn't retried away.
             client.exceptions.GraphRateLimitCapExceededError: when honoring `Retry-After` or the
-                next backoff step would exceed ``total_wait_cap_seconds``.
+                next backoff step would exceed ``total_wait_cap_seconds``, or when the number of
+                retry attempts reaches ``max_retry_attempts``.
+            client.exceptions.GraphConnectionError: when the request fails at the transport level
+                (connection error, timeout, DNS failure — ``requests.RequestException``) and
+                either ``retry=False``, or the retry budget (wait cap or attempt cap) is
+                exhausted.
         """
         full_url = url if absolute else self._join_url(url)
         elapsed_wait = 0.0
@@ -187,16 +213,21 @@ class GraphClient:
 
         while True:
             request_headers = self._build_headers(headers, auth=auth)
-            response = self._session.request(
-                method,
-                full_url,
-                json=json,
-                params=params,
-                headers=request_headers,
-                data=data,
-                stream=stream,
-                timeout=timeout,
-            )
+            try:
+                response = self._session.request(
+                    method,
+                    full_url,
+                    json=json,
+                    params=params,
+                    headers=request_headers,
+                    data=data,
+                    stream=stream,
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                elapsed_wait, attempt = self._retry_connection_error_or_raise(exc, retry, elapsed_wait, attempt)
+                continue
+
             if response.ok:
                 return response
 
@@ -212,24 +243,68 @@ class GraphClient:
                 continue
 
             if self._is_retryable(status, retry_transient_workbook):
-                wait_seconds = self._compute_wait_seconds(response, attempt)
-                remaining = self._total_wait_cap_seconds - elapsed_wait
-                if wait_seconds > remaining:
-                    error_code, message = _parse_graph_error(response)
-                    raise GraphRateLimitCapExceededError(
-                        f"Microsoft Graph rate-limited the request (HTTP {status}: {message}) and "
-                        f"the required wait ({wait_seconds:.0f}s) exceeds the remaining retry "
-                        f"budget ({remaining:.0f}s of {self._total_wait_cap_seconds:.0f}s total). "
-                        f"Please retry the job later.",
-                        status_code=status,
-                        error_code=error_code,
-                    )
-                self._sleep(wait_seconds)
-                elapsed_wait += wait_seconds
-                attempt += 1
+                elapsed_wait, attempt = self._retry_error_response_or_raise(response, elapsed_wait, attempt)
                 continue
 
             _raise_for_error_response(response)
+
+    def _retry_error_response_or_raise(
+        self, response: requests.Response, elapsed_wait: float, attempt: int
+    ) -> tuple[float, int]:
+        """Sleep and return the updated ``(elapsed_wait, attempt)``, or raise if the budget is spent."""
+        status = response.status_code
+        if attempt >= self._max_retry_attempts:
+            error_code, message = _parse_graph_error(response)
+            raise GraphRateLimitCapExceededError(
+                f"Microsoft Graph rate-limited the request (HTTP {status}: {message}) and the "
+                f"maximum of {self._max_retry_attempts} retry attempts was reached. Please retry "
+                "the job later.",
+                status_code=status,
+                error_code=error_code,
+            )
+
+        wait_seconds = self._compute_wait_seconds(response, attempt)
+        remaining = self._total_wait_cap_seconds - elapsed_wait
+        if wait_seconds > remaining:
+            error_code, message = _parse_graph_error(response)
+            raise GraphRateLimitCapExceededError(
+                f"Microsoft Graph rate-limited the request (HTTP {status}: {message}) and "
+                f"the required wait ({wait_seconds:.0f}s) exceeds the remaining retry "
+                f"budget ({remaining:.0f}s of {self._total_wait_cap_seconds:.0f}s total). "
+                f"Please retry the job later.",
+                status_code=status,
+                error_code=error_code,
+            )
+        self._sleep(wait_seconds)
+        return elapsed_wait + wait_seconds, attempt + 1
+
+    def _retry_connection_error_or_raise(
+        self, exc: requests.RequestException, retry: bool, elapsed_wait: float, attempt: int
+    ) -> tuple[float, int]:
+        """Sleep (exponential backoff, no ``Retry-After`` to honor) and return the updated
+        ``(elapsed_wait, attempt)``, or raise :class:`GraphConnectionError` if ``retry`` is
+        ``False`` or the retry budget is spent.
+        """
+        if not retry:
+            raise GraphConnectionError(
+                f"A network error occurred while calling Microsoft Graph: {exc}. Please retry the job."
+            ) from exc
+        if attempt >= self._max_retry_attempts:
+            raise GraphConnectionError(
+                f"A network error occurred while calling Microsoft Graph ({exc}) and the maximum of "
+                f"{self._max_retry_attempts} retry attempts was reached. Please retry the job later."
+            ) from exc
+
+        wait_seconds = self._compute_backoff_seconds(attempt)
+        remaining = self._total_wait_cap_seconds - elapsed_wait
+        if wait_seconds > remaining:
+            raise GraphConnectionError(
+                f"A network error occurred while calling Microsoft Graph ({exc}) and the required "
+                f"wait ({wait_seconds:.0f}s) exceeds the remaining retry budget ({remaining:.0f}s "
+                f"of {self._total_wait_cap_seconds:.0f}s total). Please retry the job later."
+            ) from exc
+        self._sleep(wait_seconds)
+        return elapsed_wait + wait_seconds, attempt + 1
 
     def get(self, url: str, **kwargs) -> requests.Response:
         return self.request("GET", url, **kwargs)
@@ -285,8 +360,8 @@ class GraphClient:
             return True
         return retry_transient_workbook and status in _WORKBOOK_TRANSIENT_STATUSES
 
-    @staticmethod
-    def _compute_wait_seconds(response: requests.Response, attempt: int) -> float:
+    @classmethod
+    def _compute_wait_seconds(cls, response: requests.Response, attempt: int) -> float:
         if response.status_code in _RATE_LIMIT_STATUSES:
             retry_after = response.headers.get("Retry-After")
             if retry_after is not None:
@@ -294,6 +369,11 @@ class GraphClient:
                     return float(retry_after)
                 except ValueError:
                     logger.warning("Ignoring non-numeric Retry-After header: %r", retry_after)
+        return cls._compute_backoff_seconds(attempt)
+
+    @staticmethod
+    def _compute_backoff_seconds(attempt: int) -> float:
+        """Exponential backoff for cases with no ``Retry-After`` to honor (5xx, connection errors)."""
         return min(_BACKOFF_BASE_SECONDS * (2**attempt), _BACKOFF_MAX_SECONDS)
 
     def _sleep(self, seconds: float) -> None:

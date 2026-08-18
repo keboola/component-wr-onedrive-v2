@@ -1,10 +1,12 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from client.exceptions import (
     GraphBadRequestError,
     GraphClientError,
+    GraphConnectionError,
     GraphNotFoundError,
     GraphPermissionError,
     GraphQuotaExceededError,
@@ -152,6 +154,22 @@ class TestRateLimitCap:
 
         assert "600" in str(exc_info.value) or "600s" in str(exc_info.value)
         session.request.assert_called_once()
+
+    @patch("client.graph_client.time.sleep")
+    def test_retry_after_zero_loop_terminates_via_attempt_cap(self, mock_sleep):
+        """A server that always sends `Retry-After: 0` never accumulates cumulative wait, so only
+        the max-attempts guard (MINOR-3) can stop this from looping forever."""
+        session = MagicMock()
+        session.request.return_value = _response(
+            429, _error_body("TooManyRequests", "slow down"), headers={"Retry-After": "0"}
+        )
+        client = _client(session=session, total_wait_cap_seconds=10_000.0, max_retry_attempts=15)
+
+        with pytest.raises(GraphRateLimitCapExceededError):
+            client.get("/me")
+
+        assert session.request.call_count == 16  # initial attempt + 15 retries
+        assert mock_sleep.call_count == 15
 
     @patch("client.graph_client.time.sleep")
     def test_cumulative_retries_exhausting_cap_raises(self, mock_sleep):
@@ -331,6 +349,69 @@ class TestErrorMapping:
 
         assert "Not Found" in str(exc_info.value)
         assert exc_info.value.error_code is None
+
+
+class TestConnectionErrors:
+    @patch("client.graph_client.time.sleep")
+    def test_connection_error_retried_then_succeeds(self, mock_sleep):
+        session = MagicMock()
+        session.request.side_effect = [
+            requests.exceptions.ConnectionError("connection refused"),
+            _response(200, {"ok": True}),
+        ]
+        client = _client(session=session)
+
+        response = client.get("/me")
+
+        assert response.ok
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("client.graph_client.time.sleep")
+    def test_timeout_retried_then_succeeds(self, mock_sleep):
+        session = MagicMock()
+        session.request.side_effect = [
+            requests.exceptions.Timeout("timed out"),
+            _response(200, {"ok": True}),
+        ]
+        client = _client(session=session)
+
+        response = client.get("/me")
+
+        assert response.ok
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("client.graph_client.time.sleep")
+    def test_retries_exhausted_raises_graph_connection_error(self, mock_sleep):
+        session = MagicMock()
+        session.request.side_effect = requests.exceptions.ConnectionError("connection refused")
+        client = _client(session=session, total_wait_cap_seconds=1.5)
+
+        with pytest.raises(GraphConnectionError):
+            client.get("/me")
+
+    def test_retry_false_raises_graph_connection_error_immediately(self):
+        session = MagicMock()
+        session.request.side_effect = requests.exceptions.ConnectionError("connection refused")
+        client = _client(session=session)
+
+        with pytest.raises(GraphConnectionError):
+            client.put("/drives/1/items/2/content", retry=False)
+
+        session.request.assert_called_once()
+
+    @patch("client.graph_client.time.sleep")
+    def test_attempt_cap_raises_graph_connection_error(self, mock_sleep):
+        # A connection error every time never accumulates cumulative wait beyond a *huge* cap,
+        # so only the attempt cap can stop this loop.
+        session = MagicMock()
+        session.request.side_effect = requests.exceptions.ConnectionError("connection refused")
+        client = _client(session=session, total_wait_cap_seconds=10_000.0, max_retry_attempts=3)
+
+        with pytest.raises(GraphConnectionError):
+            client.get("/me")
+
+        assert session.request.call_count == 4  # initial attempt + 3 retries
+        assert mock_sleep.call_count == 3
 
 
 class TestPaging:

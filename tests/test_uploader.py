@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, call
 
@@ -6,6 +7,7 @@ import pytest
 from client.exceptions import (
     FileAlreadyExistsError,
     GraphClientError,
+    GraphConnectionError,
     GraphNotFoundError,
     InvalidPathError,
     UploadSessionError,
@@ -370,6 +372,32 @@ class TestUploadSessionResume:
         expected_chunk_end = min(resumed_offset + CHUNK_SIZE, size) - 1
         assert resumed_range == f"bytes {resumed_offset}-{expected_chunk_end}/{size}"
 
+    def test_graph_connection_error_resumes_from_next_expected_ranges(self, tmp_path):
+        """A connection error/timeout at the `GraphClient` transport boundary now surfaces as
+        `GraphConnectionError` (a `GraphClientError` subclass with no `status_code`) instead of a
+        raw `requests.RequestException` — the resume dance must treat it as transient, same as a
+        503, rather than aborting immediately because `None not in _TRANSIENT_CHUNK_STATUSES`."""
+        size = 25 * 1024 * 1024
+        local_path = _make_sparse_file(tmp_path / "big.bin", size)
+        client = MagicMock()
+        client.post.return_value = _response(200, {"uploadUrl": "https://upload.example/session"})
+        resumed_offset = CHUNK_SIZE + 2048
+        client.put.side_effect = [
+            _response(202),  # chunk 1 ok
+            GraphConnectionError("connection refused"),  # chunk 2: connection error
+            _response(202),  # resumed partial chunk accepted
+            _response(201, {"id": "item-big"}),  # final chunk
+        ]
+        client.get.return_value = _response(200, {"nextExpectedRanges": [f"{resumed_offset}-"]})
+
+        result = upload_file(client, "drive-1", "parent-1", local_path, "big.bin", "fail")
+
+        assert result == {"id": "item-big"}
+        client.get.assert_called_once_with("https://upload.example/session", absolute=True, auth=False, retry=False)
+        resumed_range = client.put.call_args_list[2].kwargs["headers"]["Content-Range"]
+        expected_chunk_end = min(resumed_offset + CHUNK_SIZE, size) - 1
+        assert resumed_range == f"bytes {resumed_offset}-{expected_chunk_end}/{size}"
+
     def test_session_404_restarts_once(self, tmp_path):
         size = 5
         local_path = _make_sparse_file(tmp_path / "small.bin", SIMPLE_UPLOAD_THRESHOLD + size)
@@ -422,6 +450,23 @@ class TestUploadSessionResume:
 
         assert client.put.call_count == MAX_RESUME_ATTEMPTS + 1
         client.delete.assert_called_once_with("https://upload.example/session", absolute=True, auth=False, retry=False)
+
+    def test_abort_session_failure_does_not_log_the_upload_url(self, tmp_path, caplog):
+        """`uploadUrl` is a pre-signed, credential-bearing URL — a failed best-effort cleanup
+        DELETE must never log it (IMPORTANT-2)."""
+        size = 5
+        local_path = _make_sparse_file(tmp_path / "small.bin", SIMPLE_UPLOAD_THRESHOLD + size)
+        secret_url = "https://upload.example/session?token=super-secret-signed-token"
+        client = MagicMock()
+        client.post.return_value = _response(200, {"uploadUrl": secret_url})
+        client.put.side_effect = _graph_error(400)  # non-retryable -> triggers _abort_session
+        client.delete.side_effect = _graph_error(500)  # cleanup DELETE itself fails
+
+        with caplog.at_level(logging.WARNING, logger="client.uploader"), pytest.raises(UploadSessionError):
+            upload_file(client, "drive-1", "parent-1", local_path, "small.bin", "fail")
+
+        assert secret_url not in caplog.text
+        assert "abandoned upload session" in caplog.text
 
     def test_non_retryable_status_aborts_immediately_without_resuming(self, tmp_path):
         size = 5

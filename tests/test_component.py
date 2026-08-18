@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import unittest
 from unittest import mock
 from unittest.mock import MagicMock
@@ -248,3 +249,141 @@ class TestBuildTokenProvider:
 
         with pytest.raises(UserException, match="not authorized"):
             comp._build_token_provider(account)
+
+
+# --- MINOR-8: workbook/worksheet partial-model validation --------------------------------------
+
+
+class TestRequireWorkbookPath:
+    """`_require_workbook_path` (used by `search`/`createWorkbook`) validates through the
+    `Workbook` partial model instead of poking raw `parameters.get()` values, while still
+    preserving the exact v1-parity "missing" messages."""
+
+    def test_search_missing_workbook_raises_v1_parity_message(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(
+            UserException, match=re.escape('To search for a workbook please configure "parameters.workbook.path".')
+        ):
+            comp.search()
+
+    def test_create_workbook_missing_workbook_raises_v1_parity_message(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(
+            UserException, match=re.escape('To create workbook please configure "parameters.workbook.path".')
+        ):
+            comp.create_workbook()
+
+    def test_create_workbook_empty_workbook_section_raises_v1_parity_message(self, tmp_path):
+        # An empty `workbook: {}` section, not just a missing key entirely.
+        parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {}}
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(
+            UserException, match=re.escape('To create workbook please configure "parameters.workbook.path".')
+        ):
+            comp.create_workbook()
+
+    def test_ids_only_workbook_still_raises_the_missing_path_message(self, tmp_path):
+        # `search`/`createWorkbook` only ever accept a path (v1 parity) — a well-formed
+        # ids-only `Workbook` must still be rejected with the path-specific message, not silently
+        # accepted or given a generic validation error.
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"drive_id": "drive-1", "file_id": "file-1"},
+        }
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(
+            UserException, match=re.escape('To create workbook please configure "parameters.workbook.path".')
+        ):
+            comp.create_workbook()
+
+    def test_invalid_workbook_combo_raises_validation_error_not_raw_path(self, tmp_path):
+        # `path` combined with `drive_id`/`file_id` is invalid per the `Workbook` model — this can
+        # only be caught once actual model validation runs (raw `.get("path")` would silently
+        # ignore the conflicting ids and let it through).
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"path": "/book.xlsx", "drive_id": "drive-1", "file_id": "file-1"},
+        }
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(UserException, match="Invalid workbook configuration"):
+            comp.create_workbook()
+
+    def test_valid_path_is_returned_from_the_validated_model(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {"path": "/book.xlsx"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch(
+                "component.search_workbook",
+                return_value=None,
+            ) as mock_search_workbook,
+        ):
+            result = comp.search()
+
+        mock_search_workbook.assert_called_once()
+        assert mock_search_workbook.call_args.args[2] == "/book.xlsx"
+        assert result == {"file": None}
+
+
+class TestCreateWorksheetValidation:
+    """`create_worksheet` validates `parameters.worksheet.name` through the `Worksheet` partial
+    model instead of raw `parameters.get()`, while preserving the v1-parity "missing" message and
+    the existing name-only targeting behavior (id/position are ignored, same as before)."""
+
+    def test_missing_worksheet_section_raises_v1_parity_message(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {"path": "/book.xlsx"}}
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(
+            UserException, match=re.escape('To create worksheet please configure "parameters.worksheet.name".')
+        ):
+            comp.create_worksheet()
+
+    def test_worksheet_section_without_name_raises_v1_parity_message(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"id": "some-id"},
+        }
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(
+            UserException, match=re.escape('To create worksheet please configure "parameters.worksheet.name".')
+        ):
+            comp.create_worksheet()
+
+    def test_uses_name_only_ignoring_id_and_position(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1", "id": "should-be-ignored", "position": 3},
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch(
+                "component.resolve_workbook", return_value=("drive-1", "file-1", False)
+            ) as mock_resolve_workbook,
+            mock.patch(
+                "component.resolve_worksheet", return_value=("ws-1", True, "Sheet1")
+            ) as mock_resolve_worksheet,
+        ):
+            result = comp.create_worksheet()
+
+        mock_resolve_workbook.assert_called_once()
+        called_worksheet = mock_resolve_worksheet.call_args.args[3]
+        assert called_worksheet.name == "Sheet1"
+        assert called_worksheet.id is None
+        assert called_worksheet.position is None
+        assert result == {"worksheet": {"driveId": "drive-1", "fileId": "file-1", "worksheetId": "ws-1"}}

@@ -19,7 +19,7 @@ import pytest
 from freezegun import freeze_time
 from keboola.component.exceptions import UserException
 
-from client.exceptions import GraphPermissionError
+from client.exceptions import GraphConnectionError, GraphPermissionError
 from component import Component
 
 
@@ -417,6 +417,26 @@ class TestErrorMapping:
             mock.patch(
                 "component.upload_file", side_effect=GraphPermissionError("no access", status_code=403)
             ),pytest.raises(UserException, match="no access")
+        ):
+            comp.run()
+
+    def test_graph_connection_error_maps_to_user_exception(self, tmp_path):
+        """IMPORTANT-1: a network failure that exhausts the client's retry budget surfaces as
+        `GraphConnectionError`, which must map to a `UserException` (exit 1), not propagate as an
+        unhandled exception (exit 2)."""
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch(
+                "component.upload_file",
+                side_effect=GraphConnectionError("network error, retry budget exhausted"),
+            ),
+            pytest.raises(UserException, match="retry budget exhausted"),
         ):
             comp.run()
 

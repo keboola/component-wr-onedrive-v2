@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from client.auth import (
     REFRESH_SAFETY_MARGIN_SECONDS,
@@ -254,6 +255,36 @@ class TestAllCandidatesFail:
     def test_non_invalid_grant_error_aborts_without_trying_other_candidates(self):
         session = MagicMock()
         session.post.return_value = _make_response(500, {"error": "server_error"}, text="boom")
+        provider = RefreshTokenProvider(
+            client_id="client-1",
+            client_secret="secret-1",
+            authority="common",
+            refresh_token_candidates=["refresh-state", "refresh-config"],
+            session=session,
+        )
+
+        with pytest.raises(AuthenticationError):
+            provider.get_access_token()
+
+        assert session.post.call_count == 1
+
+    def test_network_failure_raises_authentication_error(self):
+        session = MagicMock()
+        session.post.side_effect = requests.exceptions.ConnectionError("connection refused")
+        provider = RefreshTokenProvider(
+            client_id="client-1",
+            client_secret="secret-1",
+            authority="common",
+            refresh_token_candidates=["refresh-state"],
+            session=session,
+        )
+
+        with pytest.raises(AuthenticationError, match="Microsoft login endpoint"):
+            provider.get_access_token()
+
+    def test_timeout_raises_authentication_error_without_trying_other_candidates(self):
+        session = MagicMock()
+        session.post.side_effect = requests.exceptions.Timeout("timed out")
         provider = RefreshTokenProvider(
             client_id="client-1",
             client_secret="secret-1",

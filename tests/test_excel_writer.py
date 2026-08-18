@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from client.excel_writer import _SESSION_POLL_MAX_ATTEMPTS as SESSION_POLL_MAX_ATTEMPTS
 from client.excel_writer import (
     RangeAddress,
     column_int_to_str,
@@ -337,6 +338,24 @@ class TestWorkbookSession:
         assert client.get.call_args_list[0].args[0] == "https://graph/status/1"
         assert client.get.call_args_list[0].kwargs["absolute"] is True
         assert client.get.call_args_list[2].args[0] == "https://graph/result/1"
+
+    def test_poll_deadline_reached_returns_none_sessionless(self, monkeypatch, caplog):
+        """MINOR-4: a session stuck "running" forever must not poll forever — it falls back to
+        sessionless (like any other session-creation failure) once the poll deadline is hit."""
+        client = MagicMock()
+        client.post.return_value = _response(202, headers={"Location": "https://graph/status/1"})
+        client.get.return_value = _response(json_body={"status": "running"})
+        sleeps = []
+        monkeypatch.setattr("client.excel_writer.time.sleep", lambda seconds: sleeps.append(seconds))
+
+        with caplog.at_level(logging.WARNING, logger="client.excel_writer"), workbook_session(
+            client, "drive-1", "file-1"
+        ) as session_id:
+            assert session_id is None
+
+        assert len(sleeps) == SESSION_POLL_MAX_ATTEMPTS
+        assert client.get.call_count == SESSION_POLL_MAX_ATTEMPTS
+        assert "workbook session could not be created" in caplog.text
 
     def test_creation_failure_yields_none_sessionless(self):
         client = MagicMock()

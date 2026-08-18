@@ -202,17 +202,23 @@ class RefreshTokenProvider(TokenProvider):
         ) from last_error
 
     def _request_token(self, refresh_token: str) -> dict:
-        response = self._session.post(
-            self._token_url,
-            data={
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-                "scope": SCOPES,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            },
-            timeout=30,
-        )
+        try:
+            response = self._session.post(
+                self._token_url,
+                data={
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "scope": SCOPES,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise AuthenticationError(
+                f"Could not reach the Microsoft login endpoint to refresh the access token: {exc}. "
+                "This is likely a transient network issue; please retry the job."
+            ) from exc
         if response.status_code == 200:
             return response.json()
 

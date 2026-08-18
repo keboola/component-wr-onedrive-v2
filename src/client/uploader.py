@@ -24,6 +24,7 @@ file — in that order, so validation always happens before the first request.
 import logging
 import os
 import re
+from datetime import datetime
 from urllib.parse import quote
 
 import requests
@@ -31,6 +32,7 @@ import requests
 from client.exceptions import (
     FileAlreadyExistsError,
     GraphClientError,
+    GraphConnectionError,
     GraphNotFoundError,
     InvalidPathError,
     UploadSessionError,
@@ -74,7 +76,7 @@ MAX_SEGMENT_LENGTH = 255
 MAX_PATH_LENGTH = 400
 
 
-def resolve_placeholders(path: str, now) -> str:
+def resolve_placeholders(path: str, now: datetime) -> str:
     """Replace ``{date:<strftime-format>}`` tokens in ``path`` with ``now`` (caller-supplied UTC).
 
     ``now`` is resolved once by the caller at run start (design spec: "resolved at run start,
@@ -358,6 +360,9 @@ def _upload_chunks(
         try:
             response = client.put(upload_url, data=chunk, headers=headers, absolute=True, auth=False, retry=False)
         except GraphClientError as exc:
+            # `GraphConnectionError` (a `GraphClientError` subclass) is how a connection error /
+            # timeout / DNS failure now surfaces from `client.put()` — it carries no status code,
+            # so it falls through to `_resume_after_failure`, which treats it as transient.
             if exc.status_code == 404:
                 raise _SessionExpired from exc
             if _is_name_conflict(exc):
@@ -366,6 +371,10 @@ def _upload_chunks(
             file_handle.seek(offset)
             continue
         except requests.exceptions.RequestException as exc:
+            # Defense in depth only: `client.put()` wraps every `requests.RequestException` into
+            # `GraphConnectionError` (caught above) at the transport boundary, so this branch
+            # should be unreachable via `GraphClient` — kept in case a caller ever passes a raw
+            # `requests`-based client instead.
             offset, resume_attempts = _resume_after_failure(client, upload_url, exc, offset, resume_attempts, file_name)
             file_handle.seek(offset)
             continue
@@ -394,7 +403,14 @@ def _resume_after_failure(
     :class:`~client.exceptions.UploadSessionError` (aborting the session first) once
     :data:`MAX_RESUME_ATTEMPTS` is exceeded.
     """
-    if isinstance(exc, GraphClientError) and exc.status_code not in _TRANSIENT_CHUNK_STATUSES:
+    # `GraphConnectionError` (connection error/timeout/DNS failure — no HTTP status code was ever
+    # received) is always treated as transient here, same as 429/5xx; any other `GraphClientError`
+    # subclass with a status code outside `_TRANSIENT_CHUNK_STATUSES` is not retried.
+    if (
+        isinstance(exc, GraphClientError)
+        and not isinstance(exc, GraphConnectionError)
+        and exc.status_code not in _TRANSIENT_CHUNK_STATUSES
+    ):
         _abort_session(client, upload_url)
         raise UploadSessionError(f"Uploading '{file_name}' failed with a non-retryable error: {exc}") from exc
 
@@ -424,8 +440,10 @@ def _abort_session(client: GraphClient, upload_url: str) -> None:
     """Best-effort `DELETE uploadUrl` so an abandoned session leaves no partial file behind."""
     try:
         client.delete(upload_url, absolute=True, auth=False, retry=False)
-    except GraphClientError, requests.exceptions.RequestException:
-        logger.warning("Failed to delete the abandoned upload session at %s.", upload_url)
+    except (GraphClientError, requests.exceptions.RequestException):
+        # `upload_url` is a pre-signed, credential-bearing URL — never log it (design spec §6
+        # "logging"; a leaked `uploadUrl` grants unauthenticated write access to the session).
+        logger.warning("Failed to delete the abandoned upload session.")
 
 
 def _map_late_conflict(exc: GraphClientError, file_name: str, conflict_behavior: str) -> GraphClientError:

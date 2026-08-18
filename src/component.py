@@ -33,6 +33,7 @@ from client.exceptions import (
     FileAlreadyExistsError,
     GraphBadRequestError,
     GraphClientError,
+    GraphConnectionError,
     GraphNotFoundError,
     GraphPermissionError,
     GraphQuotaExceededError,
@@ -72,6 +73,7 @@ _USER_FACING_ERRORS = (
     GraphQuotaExceededError,
     GraphBadRequestError,
     GraphRateLimitCapExceededError,
+    GraphConnectionError,
     InvalidPathError,
     FileAlreadyExistsError,
     UploadSessionError,
@@ -227,26 +229,53 @@ class Component(ComponentBase):
         account = self._load_account()
         client = self._build_client(account)
         workbook = self._load_workbook_param()
-        worksheet_params = self.configuration.parameters.get("worksheet") or {}
-        name = worksheet_params.get("name")
-        if not name:
-            raise UserException('To create worksheet please configure "parameters.worksheet.name".')
+        worksheet = self._require_worksheet_name('To create worksheet please configure "parameters.worksheet.name".')
         try:
             drive_id, file_id, _workbook_created = resolve_workbook(client, account, workbook, create_if_missing=False)
-            worksheet_id, created, _actual_name = resolve_worksheet(
-                client, drive_id, file_id, Worksheet(name=name), session=None
-            )
+            worksheet_id, created, _actual_name = resolve_worksheet(client, drive_id, file_id, worksheet, session=None)
         except (AuthenticationError, GraphClientError) as exc:
             raise UserException(str(exc)) from exc
         if not created:
-            raise UserException(f'Worksheet "{name}" already exists.')
+            raise UserException(f'Worksheet "{worksheet.name}" already exists.')
         return {"worksheet": {"driveId": drive_id, "fileId": file_id, "worksheetId": worksheet_id}}
 
     def _require_workbook_path(self, missing_message: str) -> str:
-        path = (self.configuration.parameters.get("workbook") or {}).get("path")
-        if not path:
+        """Validate ``parameters.workbook.path`` through the ``Workbook`` partial model.
+
+        Used by ``search``/``createWorkbook``, which — unlike ``getWorksheets``/
+        ``createWorksheet`` — only ever accept a ``path`` (no ids targeting, design spec §5). The
+        raw-dict presence check happens *before* full-model validation so a ``parameters.workbook``
+        section that's missing/empty entirely (the common "not configured yet" case) gets the
+        exact v1-parity ``missing_message`` below, rather than the generic "Invalid workbook
+        configuration" one ``Workbook``'s own "requires either path or drive_id+file_id" validator
+        would otherwise raise for an empty dict.
+        """
+        workbook_params = self.configuration.parameters.get("workbook")
+        if not isinstance(workbook_params, dict) or not workbook_params.get("path"):
             raise UserException(missing_message)
-        return path
+        try:
+            workbook = Workbook.model_validate(workbook_params)
+        except ValidationError as e:
+            raise UserException(f"Invalid workbook configuration: {_format_validation_error(e)}") from e
+        # The presence check above guarantees `workbook_params["path"]` was truthy, and `Workbook`
+        # never clears a supplied `path` during validation.
+        assert workbook.path is not None
+        return workbook.path
+
+    def _require_worksheet_name(self, missing_message: str) -> Worksheet:
+        """Validate ``parameters.worksheet.name`` through the ``Worksheet`` partial model.
+
+        Used by ``createWorksheet``, which — like v1's ``SheetProvider::createSheet`` — only ever
+        targets a worksheet by name (never id/position); see :meth:`_require_workbook_path` for
+        why the raw-dict presence check happens before full-model validation.
+        """
+        worksheet_params = self.configuration.parameters.get("worksheet")
+        if not isinstance(worksheet_params, dict) or not worksheet_params.get("name"):
+            raise UserException(missing_message)
+        try:
+            return Worksheet.model_validate({"name": worksheet_params["name"]})
+        except ValidationError as e:
+            raise UserException(f"Invalid worksheet configuration: {_format_validation_error(e)}") from e
 
     def _load_workbook_param(self) -> Workbook:
         """Validate just ``parameters.workbook`` (ids or path) for a sync action.
