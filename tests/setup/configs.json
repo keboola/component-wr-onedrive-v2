@@ -1,0 +1,506 @@
+[
+  {
+    "name": "01_testConnection",
+    "description": "Sync action testConnection: OAuth refresh-token grant against login.microsoftonline.com followed by GET /me. This is the canonical 'token refresh' cassette.",
+    "config": {
+      "action": "testConnection",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "02_listLibraries",
+    "description": "Sync action listLibraries: site resolution (GET /sites/{hostname}:{path}) followed by listing the site's document libraries (GET /sites/{id}/drives). Exercises site+drive resolution.",
+    "config": {
+      "action": "listLibraries",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "10_search_missing",
+    "description": "Sync action search for a workbook.path that does not exist yet -> {'file': null}, exit 0.",
+    "config": {
+      "action": "search",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/reports/does-not-exist.xlsx"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "11_createWorkbook",
+    "description": "Sync action createWorkbook: create a brand-new empty workbook under the run's dedicated test folder.",
+    "config": {
+      "action": "createWorkbook",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "12_search_found",
+    "description": "Sync action search: same path just created by 11_createWorkbook -> resolves to a real file (driveId/fileId/name/path).",
+    "config": {
+      "action": "search",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "13_getWorksheets",
+    "description": "Sync action getWorksheets on the workbook created by 11_createWorkbook (lists the default worksheet Graph creates for a brand-new workbook).",
+    "config": {
+      "action": "getWorksheets",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "14_createWorksheet",
+    "description": "Sync action createWorksheet: add a new named worksheet ('VcrTestSheet') to the workbook.",
+    "config": {
+      "action": "createWorksheet",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+        },
+        "worksheet": {
+          "name": "VcrTestSheet"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "15_createWorksheet_conflict",
+    "description": "Sync action createWorksheet again with the same name as 14_createWorksheet -> already exists -> UserException, exit 1. Deliberate-failure cassette.",
+    "config": {
+      "action": "createWorksheet",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "DUMMY_TENANT_ID",
+          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+        },
+        "worksheet": {
+          "name": "VcrTestSheet"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "20_file_conflict_replace",
+    "description": "Run mode=file: simple PUT upload (small file, below the real SIMPLE_UPLOAD_THRESHOLD), conflict_behavior=replace. Creates the shared target file that 21_file_conflict_fail/22_file_conflict_rename depend on (recorded in this file order) \u2014 also exercises nested folder creation via destination.folder_path.",
+    "config": {
+      "parameters": {
+        "mode": "file",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "destination": {
+          "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
+          "conflict_behavior": "replace"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "files": [
+            {
+              "destination": "vcr_test_file.txt"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "21_file_conflict_fail",
+    "description": "Run mode=file: same destination folder + file name as 20_file_conflict_replace, conflict_behavior=fail. Deliberate-failure cassette (Graph 409 nameAlreadyExists -> FileAlreadyExistsError -> UserException, exit 1). Depends on 20 having already created the target file (recorded in file order, right after it) rather than pre-creating its own target from scratch.",
+    "config": {
+      "parameters": {
+        "mode": "file",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "destination": {
+          "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
+          "conflict_behavior": "fail"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "files": [
+            {
+              "destination": "vcr_test_file.txt"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "22_file_conflict_rename",
+    "description": "Run mode=file: same destination folder + file name again, conflict_behavior=rename. Graph auto-renames the upload (e.g. 'vcr_test_file 1.txt'), exit 0.",
+    "config": {
+      "parameters": {
+        "mode": "file",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "destination": {
+          "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
+          "conflict_behavior": "rename"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "files": [
+            {
+              "destination": "vcr_test_file.txt"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "23_upload_session_small_threshold",
+    "description": "Run mode=file: forces client.uploader.SIMPLE_UPLOAD_THRESHOLD/CHUNK_SIZE down to a tiny value (scripts/record_vcr_cassettes.py monkeypatches this scenario only) so the small fixture file goes through createUploadSession + chunked PUT instead of a simple PUT. A resumed chunk is captured only if a transient error happens to occur live (best-effort per design spec \u00a77 \u2014 not forced).",
+    "config": {
+      "parameters": {
+        "mode": "file",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "destination": {
+          "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
+          "conflict_behavior": "replace"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "files": [
+            {
+              "destination": "vcr_upload_session_file.txt"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "30_table_csv_replace",
+    "description": "Run mode=table_csv: uploads the single input table as a CSV file, conflict_behavior=replace.",
+    "config": {
+      "parameters": {
+        "mode": "table_csv",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "destination": {
+          "folder_path": "keboola-vcr-tests/__RUN_ID__/tables",
+          "conflict_behavior": "replace"
+        },
+        "csv": {
+          "file_name": "vcr_test_table.csv"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "tables": [
+            {
+              "destination": "vcr_test_table.csv"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "31_table_excel_overwrite",
+    "description": "Run mode=table_excel: creates a new workbook+worksheet (workbook session create -> range PATCH writes -> session close), append=false (overwrite/first write).",
+    "config": {
+      "parameters": {
+        "mode": "table_excel",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/excel/overwrite.xlsx"
+        },
+        "worksheet": {
+          "name": "Data"
+        },
+        "append": false,
+        "batch_size": 5000
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "tables": [
+            {
+              "destination": "vcr_test_excel_table.csv"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "32_table_excel_append",
+    "description": "Run mode=table_excel: writes into the SAME workbook+worksheet 31_table_excel_overwrite created, append=true \u2014 verifies rows are added rather than replacing existing ones.",
+    "config": {
+      "parameters": {
+        "mode": "table_excel",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/excel/overwrite.xlsx"
+        },
+        "worksheet": {
+          "name": "Data"
+        },
+        "append": true,
+        "batch_size": 5000
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "tables": [
+            {
+              "destination": "vcr_test_excel_table_append.csv"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "33_table_excel_rename_worksheet",
+    "description": "Run mode=table_excel: targets the workbook's first sheet by position=0 with a worksheet.name that differs from its actual name -> resolve_worksheet renames it before writing (v1-parity 'target this sheet, and also rename it').",
+    "config": {
+      "parameters": {
+        "mode": "table_excel",
+        "account": {
+          "account_type": "onedrive_for_business",
+          "tenant_id": "DUMMY_TENANT_ID"
+        },
+        "workbook": {
+          "path": "/keboola-vcr-tests/__RUN_ID__/excel/rename.xlsx"
+        },
+        "worksheet": {
+          "position": 0,
+          "name": "RenamedSheet"
+        },
+        "append": false,
+        "batch_size": 5000
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      },
+      "storage": {
+        "input": {
+          "tables": [
+            {
+              "destination": "vcr_test_excel_table.csv"
+            }
+          ]
+        }
+      }
+    }
+  }
+]

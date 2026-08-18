@@ -21,6 +21,7 @@ dev = [
     "pytest>=9.0.2",
     "ruff>=0.16.0",
     "ty>=0.0.24",
+    "vcrpy>=6.0.0",
 ]
 
 [tool.ruff]

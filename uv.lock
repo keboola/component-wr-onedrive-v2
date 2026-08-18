@@ -752,6 +752,7 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "vcrpy" },
 ]
 
 [package.metadata]
@@ -773,6 +774,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "ruff", specifier = ">=0.16.0" },
     { name = "ty", specifier = ">=0.0.24" },
+    { name = "vcrpy", specifier = ">=6.0.0" },
 ]
 
 [[package]]

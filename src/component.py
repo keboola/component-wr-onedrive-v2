@@ -9,6 +9,7 @@ import csv
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -51,6 +52,106 @@ from client.uploader import ensure_folder, resolve_placeholders, upload_file, va
 from configuration import Account, AccountType, CsvOptions, Mode, RowConfig, Workbook, Worksheet
 
 logger = logging.getLogger(__name__)
+
+# --- VCR cassette sanitizers (plan Task 11) -------------------------------------------------
+#
+# ``keboola.vcr``/``vcrpy`` are dev-only dependencies (see ``pyproject.toml``'s
+# ``[dependency-groups] dev`` — the production Docker stage runs ``uv sync --no-dev``), so this
+# import must never be unconditional at module level: it would break every real job. The
+# ``keboola.datadirtest`` VCR tester (``tests/test_functional_vcr.py``) picks up ``VCR_SANITIZERS``
+# automatically via ``keboola.datadirtest.vcr.tester._load_vcr_sanitizers_from_script``, which
+# itself tolerates a missing/empty list — so ``[]`` here is a safe, inert fallback outside tests.
+try:
+    from keboola.vcr import BaseSanitizer, BodyFieldSanitizer, DefaultSanitizer, QueryParamSanitizer
+except ImportError:  # pragma: no cover - exercised only when keboola.vcr isn't installed (prod)
+    VCR_SANITIZERS: list = []
+else:
+
+    class _StableGuidSanitizer(BaseSanitizer):
+        """Replace real GUIDs (tenant id, the two GUIDs inside a SharePoint composite site id)
+        with small, stable, deterministic placeholders — scoped to a single cassette recording.
+
+        Unlike ``DefaultSanitizer``'s exact-value replacement (which needs the real value known
+        up front), Graph's ``tenant_id``/site-id GUIDs are *round-tripped*: the component reads a
+        site id from one response and reuses it verbatim in the URL of every later call in the
+        same run. Scrubbing them from the cassette (recorded requests/responses only — never from
+        what the live component actually sends/reads during recording, so a live recording run is
+        never affected) with a **consistent** real-value -> placeholder mapping keeps every
+        occurrence of the same real GUID mapped to the same placeholder throughout one cassette,
+        so replay's request matching still lines up (see ``vcr-sanitizers.md``: this is a custom
+        ``BaseSanitizer`` subclass, the documented escape hatch for exactly this shape of value).
+
+        Deliberately **not** ``scrub_before_read`` — that flavor scrubs the response the live
+        component itself reads, which would break a real recording run the instant it echoes a
+        scrubbed placeholder back into the next live Graph URL (a 404 against the real API). The
+        mapping is per-instance (reset for every test scenario recorded, since the scaffolder
+        reloads ``VCR_SANITIZERS`` fresh per test directory), so stability is only required, and
+        only guaranteed, within a single cassette.
+        """
+
+        _GUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+        def __init__(self) -> None:
+            self._placeholders: dict[str, str] = {}
+
+        def _placeholder_for(self, real_value: str) -> str:
+            placeholder = self._placeholders.get(real_value)
+            if placeholder is None:
+                placeholder = f"00000000-0000-4000-8000-{len(self._placeholders) + 1:012d}"
+                self._placeholders[real_value] = placeholder
+            return placeholder
+
+        def _sanitize_text(self, text: str) -> str:
+            return self._GUID_RE.sub(lambda match: self._placeholder_for(match.group(0)), text)
+
+        def before_record_request(self, request):
+            if hasattr(request, "uri"):
+                request.uri = self._sanitize_text(request.uri)
+            if hasattr(request, "body") and request.body:
+                if isinstance(request.body, bytes):
+                    request.body = self._sanitize_text(request.body.decode("utf-8", errors="ignore")).encode("utf-8")
+                elif isinstance(request.body, str):
+                    request.body = self._sanitize_text(request.body)
+            return request
+
+        def before_record_response(self, response):
+            body = response.get("body")
+            if isinstance(body, dict) and "string" in body:
+                value = body["string"]
+                if isinstance(value, bytes):
+                    body["string"] = self._sanitize_text(value.decode("utf-8", errors="ignore")).encode("utf-8")
+                elif isinstance(value, str):
+                    body["string"] = self._sanitize_text(value)
+            return response
+
+    VCR_SANITIZERS = [
+        # DefaultSanitizer's own defaults already cover access_token/refresh_token/client_secret/
+        # client_id/password/id_token/client_assertion (form-encoded token-refresh body, JSON
+        # token response, and the Authorization header — the latter via the safe-header
+        # allowlist, which also strips Set-Cookie/Cookie/WWW-Authenticate along with everything
+        # else not explicitly allowed). ``"code"`` is deliberately dropped from the default list:
+        # this component never uses the OAuth authorization-code flow, but Microsoft Graph *does*
+        # use a top-level ``error.code`` field for its error taxonomy (e.g. "itemNotFound",
+        # "nameAlreadyExists") — redacting it would desync ``logs.json`` between record and replay
+        # (the component logs that code) for every deliberate-failure cassette.
+        DefaultSanitizer(sensitive_fields=[f for f in DefaultSanitizer.DEFAULT_SENSITIVE_FIELDS if f != "code"]),
+        # Upload-session ``uploadUrl`` values are pre-signed with a ``tempauth`` query-string
+        # token (SharePoint/OneDrive for Business) that grants unauthenticated write access to the
+        # session — must never leak into a committed cassette, in either the createUploadSession
+        # response body (where the URL first appears) or the subsequent chunk PUT/GET/DELETE
+        # request URIs that use it (design spec §4 "Uploads"; ``client/uploader.py`` never logs
+        # ``upload_url`` for the same reason).
+        QueryParamSanitizer(parameters=["tempauth"], replacement="REDACTED"),
+        # User principal name / mail / display name appear in `/me` (testConnection) and any
+        # Graph response embedding `createdBy`/`lastModifiedBy` identity blocks.
+        BodyFieldSanitizer(
+            fields=["userPrincipalName", "mail", "displayName", "givenName", "surname"],
+            replacement="REDACTED",
+            nested=True,
+        ),
+        _StableGuidSanitizer(),
+    ]
+# --- end VCR cassette sanitizers -----------------------------------------------------------
 
 # v1-compatible state key (design spec §2/§3) — holds the JSON-encoded payload produced by
 # `RefreshTokenProvider.rotated_refresh_token` (only `refresh_token` is actually read back).

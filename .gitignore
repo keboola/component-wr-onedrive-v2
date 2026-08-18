@@ -13,9 +13,13 @@ venv
 # kbc datafolder
 /data
 
-# vcr datadirtesting
+# vcr datadirtesting (plan Task 11) — secrets.json and any per-test secrets file must never be
+# committed. `source/data/in/` is deliberately NOT ignored here (unlike the generic
+# keboola.datadirtest boilerplate): this is a *writer* component, so `in/tables/`/`in/files/`
+# hold the real input fixtures the component uploads — VCR only mocks the HTTP layer, not the
+# filesystem, so replay needs those files physically present and committed.
 secrets.json
+tests/functional/*/source/data/config.secrets.json
 tests/functional/*/source/data/out/
-tests/functional/*/source/data/in/
 # local build-lifecycle tracker (never committed)
 docs/superpowers/wr-onedrive-v2-lifecycle.md
