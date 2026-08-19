@@ -118,13 +118,24 @@ Workbook and worksheet (table_excel mode)
 - **Batch Size** (`batch_size`) — number of rows written per Excel API request, default `5000`.
   Lower it if you hit throttling on very wide tables.
 
+Sync Actions
+============
+
+The UI exposes several sync actions to help configure a row: **Test Connection** and **List
+Libraries** (root configuration), and **Search**, **Get Worksheets**, **Create Workbook**, and
+**Create Worksheet** (used while configuring `table_excel` mode, e.g. from the Workbook Path
+field's search helper). Sync actions are normally read-only lookups — **Create Workbook** and
+**Create Worksheet** are a deliberate exception: they perform a real write (creating an empty
+workbook or worksheet), matching v1's own sync-action behavior. Only use them once you actually
+want that workbook or worksheet created.
+
 Output
 ======
 
 This component does not create any Storage output tables — its only output is the data it writes
 to OneDrive/SharePoint. The one exception is internal: rotated OAuth refresh tokens are persisted
-to each row's state so the configuration keeps working past token expiry; this requires no action
-from you.
+to state (both after a row's job run and after any sync action that touches the API) so the
+configuration keeps working past token expiry; this requires no action from you.
 
 Development
 ===========

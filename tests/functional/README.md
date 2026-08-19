@@ -6,12 +6,13 @@ This directory holds the `keboola.datadirtest` VCR functional test cases for
 Microsoft Graph HTTP cassette (`source/data/cassettes/requests.json`) plus captured logs / sync
 action output / expected exit code.
 
-Recording is **greenfield** (the sibling extractor, `kds-team.ex-onedrive`, has no VCR harness
-to model this on) and is **deferred**: it requires real Microsoft 365 test-tenant OAuth
-credentials that arrive later in a gitignored `secrets.json` at the repo root. Until then, this
-directory is (deliberately) empty and every scenario in `tests/test_functional_vcr.py` reports as
-a `pytest` **skip** — see that module's docstring for why the suite must stay green in all three
-states (not recorded / recorded+replaying / actively recording).
+Every scenario declared in `tests/setup/configs.json` has been recorded against the real
+Microsoft 365 test tenant and its cassette is committed here — `tests/test_functional_vcr.py`
+replays all of them fully offline (no network access, no credentials needed). The harness still
+supports the other two states it was designed for (not-yet-recorded scenarios report as an
+explicit, individually-named `pytest` **skip**; a human with real `secrets.json` credentials can
+re-record any scenario at any time) — see that module's docstring for why the suite must stay
+green in all three states (not recorded / recorded+replaying / actively recording).
 
 ## Recording — one command
 

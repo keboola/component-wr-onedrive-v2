@@ -25,14 +25,15 @@ See ``tests/functional/README.md`` for the full record / re-record procedure, th
 ``secrets.json`` shape, and what gets sanitized. Because recording is out-of-band, this module
 must stay green in all three states the harness can be run in:
 
-- **No cassette recorded yet** (current state — real test-tenant credentials haven't arrived):
-  every declared scenario is reported as an explicit, visible ``pytest`` **skip** (not silently
-  dropped from collection) naming the exact command to record it.
-- **Cassette present** (after ``scripts/record_vcr_cassettes.py`` has run and the resulting
-  ``tests/functional/<name>/`` directory was committed): the scenario **replays** fully offline —
-  no network access, no credentials needed.
-- **Recording** (a human runs the script above with real credentials in ``secrets.json``): this
-  module itself never records anything — it only ever replays what's already on disk.
+- **Cassette present** (current state — every scenario in ``tests/setup/configs.json`` has been
+  recorded and its ``tests/functional/<name>/`` directory committed): the scenario **replays**
+  fully offline — no network access, no credentials needed.
+- **No cassette recorded yet** (e.g. a newly-declared scenario before anyone has run the
+  recording script against it): it is reported as an explicit, visible ``pytest`` **skip** (not
+  silently dropped from collection) naming the exact command to record it.
+- **Recording** (a human runs the script above with real credentials in ``secrets.json``, e.g.
+  to re-record a scenario after a behavior change): this module itself never records anything —
+  it only ever replays what's already on disk.
 
 Scenario **names** are parametrized from ``tests/setup/configs.json`` (the source of truth for
 what's declared), not from ``keboola.datadirtest.vcr.get_test_cases()`` (which only enumerates
@@ -108,16 +109,18 @@ def test_vcr_functional(test_name):
     """
     if not _has_cassette(test_name):
         pytest.skip(
-            f"'{test_name}' has no recorded cassette yet (plan Task 11's live recording is "
-            "pending real Microsoft 365 test-tenant credentials). Record it with "
-            "`uv run python scripts/record_vcr_cassettes.py` — see tests/functional/README.md — "
-            f"then commit the resulting tests/functional/{test_name}/ directory."
+            f"'{test_name}' has no recorded cassette yet. Record it with "
+            "`uv run python scripts/record_vcr_cassettes.py` (needs real Microsoft 365 "
+            "test-tenant credentials in a gitignored secrets.json — see "
+            "tests/functional/README.md), then commit the resulting "
+            f"tests/functional/{test_name}/ directory."
         )
 
     tester = VCRDataDirTester(
         data_dir=FUNCTIONAL_DIR,
         component_script=COMPONENT_SCRIPT,
         selected_tests=[test_name],
+        validate_snapshots=True,
     )
     with _forced_small_upload_threshold_if_needed(test_name):
         tester.run()
