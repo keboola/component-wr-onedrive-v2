@@ -410,3 +410,14 @@ class TestProactiveRefresh:
         provider.get_access_token()
 
         assert session.post.call_count == 1
+
+
+def test_invalid_grant_detail_redacts_account_identifiers(clock=None):
+    """AADSTS descriptions can embed the account UPN — it must not reach the job log."""
+    from client.auth import _redact_identities
+
+    text = "AADSTS50034: The user account john.doe@contoso.com does not exist in tenant."
+    redacted = _redact_identities(text)
+    assert "john.doe@contoso.com" not in redacted
+    assert "<redacted-account>" in redacted
+    assert "AADSTS50034" in redacted

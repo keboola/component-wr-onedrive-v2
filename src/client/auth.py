@@ -14,6 +14,7 @@ directly).
 """
 
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
@@ -197,7 +198,7 @@ class RefreshTokenProvider(TokenProvider):
             return
         detail = ""
         if last_error is not None and str(last_error):
-            detail = f" Microsoft says: {sanitize_exception_text(last_error)[:400]}"
+            detail = f" Microsoft says: {_redact_identities(sanitize_exception_text(last_error))[:400]}"
         raise AuthenticationError(
             f"Unable to refresh the OneDrive/SharePoint access token: the refresh token was "
             f"rejected by Microsoft (invalid_grant).{detail} {_REAUTHORIZE_HINT}"
@@ -237,6 +238,18 @@ class RefreshTokenProvider(TokenProvider):
         raise AuthenticationError(
             f"Token refresh request failed with HTTP {response.status_code}: {description}"
         )
+
+
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _redact_identities(text: str) -> str:
+    """Mask email/UPN-like strings in error text before it reaches user-facing job logs.
+
+    Microsoft usually hides end-user identifiers in AADSTS descriptions ("{EUII Hidden}"),
+    but not for every error code — belt and braces.
+    """
+    return _EMAIL_RE.sub("<redacted-account>", text)
 
 
 def _safe_json(response: requests.Response) -> dict[str, Any]:
