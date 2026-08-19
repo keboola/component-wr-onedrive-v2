@@ -165,6 +165,17 @@
             "tooltip": "Use together with Drive ID instead of Path — never combine with Path."
           },
           "propertyOrder": 3
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "title": "Metadata",
+          "options": {
+            "hidden": true
+          },
+          "propertyOrder": 4
         }
       }
     },
@@ -205,6 +216,17 @@
             "tooltip": "Mutually exclusive with ID — set only one of the two. Combine with Name to rename the worksheet."
           },
           "propertyOrder": 3
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "title": "Metadata",
+          "options": {
+            "hidden": true
+          },
+          "propertyOrder": 4
         }
       }
     },
@@ -226,6 +248,7 @@
       "title": "Batch Size",
       "description": "Number of rows written per Excel API request",
       "default": 5000,
+      "minimum": 1,
       "options": {
         "dependencies": {
           "mode": "table_excel"

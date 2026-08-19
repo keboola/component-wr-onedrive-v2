@@ -163,7 +163,11 @@ class RowConfig(BaseModel):
     workbook: Workbook | None = None
     worksheet: Worksheet | None = None
     append: bool = False
-    batch_size: int = 5000
+    # `gt=0`: 0 would silently write nothing (batched in chunks of zero rows) and a negative
+    # value produces an unmapped `ValueError` deep inside the Excel writer's batching helper —
+    # neither is a sensible configuration, so both are rejected here as a normal validation error
+    # (phase 8 audit IMPORTANT-4).
+    batch_size: int = Field(default=5000, gt=0)
 
     @model_validator(mode="after")
     def _validate_mode_requirements(self) -> Self:

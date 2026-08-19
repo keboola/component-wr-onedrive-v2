@@ -202,6 +202,22 @@ class TestRowConfig:
         with pytest.raises(ValidationError):
             RowConfig(mode="not_a_mode", account=self._account_params())
 
+    def test_zero_batch_size_raises(self):
+        # IMPORTANT-4 (phase 8 audit): 0 would silently write nothing (batched in chunks of zero
+        # rows) — reject it as a normal configuration error instead.
+        with pytest.raises(ValidationError, match="batch_size"):
+            RowConfig(mode="file", account=self._account_params(), batch_size=0)
+
+    def test_negative_batch_size_raises(self):
+        # A negative value used to reach the Excel writer's batching helper and blow up there
+        # with an unmapped `ValueError` (exit 2) instead of a clean configuration error.
+        with pytest.raises(ValidationError, match="batch_size"):
+            RowConfig(mode="file", account=self._account_params(), batch_size=-1)
+
+    def test_positive_batch_size_is_valid(self):
+        config = RowConfig(mode="file", account=self._account_params(), batch_size=1)
+        assert config.batch_size == 1
+
     def test_unknown_top_level_keys_are_ignored(self):
         config = RowConfig(
             mode="file",
