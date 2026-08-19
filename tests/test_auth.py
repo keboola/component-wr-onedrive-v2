@@ -7,6 +7,7 @@ from client.auth import (
     REFRESH_SAFETY_MARGIN_SECONDS,
     AuthenticationError,
     RefreshTokenProvider,
+    _redact_identities,
 )
 
 
@@ -137,9 +138,7 @@ class TestRotation:
 
     def test_rotated_refresh_token_captured_after_refresh(self):
         session = MagicMock()
-        session.post.return_value = _make_response(
-            200, _token_payload(refresh_token="brand-new-refresh-token")
-        )
+        session.post.return_value = _make_response(200, _token_payload(refresh_token="brand-new-refresh-token"))
         provider = RefreshTokenProvider(
             client_id="client-1",
             client_secret="secret-1",
@@ -170,9 +169,7 @@ class TestFallbackOrder:
 
     def test_falls_back_to_config_token_when_state_token_invalid_grant(self):
         session = MagicMock()
-        invalid_grant_response = _make_response(
-            400, {"error": "invalid_grant", "error_description": "token expired"}
-        )
+        invalid_grant_response = _make_response(400, {"error": "invalid_grant", "error_description": "token expired"})
         success_response = _make_response(200, _token_payload(access_token="access-from-config"))
         session.post.side_effect = [invalid_grant_response, success_response]
 
@@ -193,9 +190,7 @@ class TestFallbackOrder:
 
     def test_logs_warning_when_a_candidate_is_rejected(self, caplog):
         session = MagicMock()
-        invalid_grant_response = _make_response(
-            400, {"error": "invalid_grant", "error_description": "token expired"}
-        )
+        invalid_grant_response = _make_response(400, {"error": "invalid_grant", "error_description": "token expired"})
         success_response = _make_response(200, _token_payload())
         session.post.side_effect = [invalid_grant_response, success_response]
 
@@ -412,10 +407,8 @@ class TestProactiveRefresh:
         assert session.post.call_count == 1
 
 
-def test_invalid_grant_detail_redacts_account_identifiers(clock=None):
+def test_invalid_grant_detail_redacts_account_identifiers():
     """AADSTS descriptions can embed the account UPN — it must not reach the job log."""
-    from client.auth import _redact_identities
-
     text = "AADSTS50034: The user account john.doe@contoso.com does not exist in tenant."
     redacted = _redact_identities(text)
     assert "john.doe@contoso.com" not in redacted
