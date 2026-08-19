@@ -121,7 +121,7 @@ def _build_secrets_override(flat_secrets: dict) -> dict:
     genuinely scrubbed from cassettes (the real tenant GUID must never be committed), so the real
     value is only ever used for the live token-refresh call during recording; the dummy
     placeholder committed to ``config.json`` afterward must exactly equal
-    ``component._GuidRedactor.PLACEHOLDER`` for replay to match (see that class's docstring).
+    ``vcr_sanitizers._GuidRedactor.PLACEHOLDER`` for replay to match (see that class's docstring).
     """
     required = ["appKey", "#appSecret", "refresh_token", "tenant_id", "site_url"]
     missing = [key for key in required if not flat_secrets.get(key)]
@@ -208,7 +208,7 @@ def _record_all(definitions: list[dict], secrets_override: dict, flat_secrets: d
 
 
 def _resanitize_sync_action_result(test_dir_name: str) -> None:
-    """Re-apply component._GuidRedactor's GUID collapsing to a recorded sync_action_result.json.
+    """Re-apply vcr_sanitizers._GuidRedactor's GUID collapsing to a recorded sync_action_result.json.
 
     That file is captured from the *live* (pre-sanitization) sync action return value —
     ``VCRRecorder.record()``'s own stdout-capture sanitization only substitutes exact known
@@ -218,17 +218,19 @@ def _resanitize_sync_action_result(test_dir_name: str) -> None:
     hence what replay reconstructs from it) has already collapsed that same GUID to
     ``_GuidRedactor.PLACEHOLDER`` — a replay-time "sync action output mismatch" even though the
     HTTP layer replayed perfectly. Reusing the exact same regex/placeholder (imported directly,
-    not re-implemented) keeps this a single source of truth.
+    not re-implemented) keeps this a single source of truth. ``_GuidRedactor`` itself lives in
+    ``vcr_sanitizers.py`` (extracted out of ``component.py`` — see that module's own docstring),
+    not on ``component`` itself.
     """
     result_path = OUTPUT_DIR / test_dir_name / "source" / "data" / "cassettes" / "sync_action_result.json"
     if not result_path.exists():
         return
 
     sys.path.insert(0, str(REPO_ROOT / "src"))
-    import component
+    import vcr_sanitizers
 
     original = result_path.read_text()
-    sanitized = component._GuidRedactor._GUID_RE.sub(component._GuidRedactor.PLACEHOLDER, original)
+    sanitized = vcr_sanitizers._GuidRedactor._GUID_RE.sub(vcr_sanitizers._GuidRedactor.PLACEHOLDER, original)
     if sanitized != original:
         result_path.write_text(sanitized)
         logger.info("Re-sanitized GUIDs in %s.", result_path)

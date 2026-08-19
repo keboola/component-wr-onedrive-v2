@@ -1,5 +1,5 @@
 {
-  "action": "search",
+  "action": "listWorkbooks",
   "parameters": {
     "account": {
       "account_type": "sharepoint",
@@ -7,7 +7,7 @@
       "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
     },
     "workbook": {
-      "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/20260819111755/reports/report.xlsx"
+      "drive_id": "b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs"
     }
   },
   "authorization": {

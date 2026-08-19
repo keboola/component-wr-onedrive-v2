@@ -25,6 +25,8 @@ from pydantic import ValidationError
 from client.auth import AuthenticationError, RefreshTokenProvider, TokenProvider
 from client.drives import get_site_id, list_drives, resolve_drive_id
 from client.excel_writer import (
+    WORKBOOK_ITEM_SELECT,
+    XLSX_MIME_TYPE,
     list_worksheets_with_headers,
     resolve_workbook,
     resolve_worksheet,
@@ -32,6 +34,7 @@ from client.excel_writer import (
     workbook_session,
     write_table,
 )
+from client.excel_writer import list_worksheets as list_worksheets_summary
 from client.exceptions import (
     FileAlreadyExistsError,
     GraphBadRequestError,
@@ -88,6 +91,11 @@ _STORAGE_DEFAULT_ENCLOSURE = '"'
 # a multi-minute hang is not (phase 8 audit, IMPORTANT-5).
 _SYNC_ACTION_TOTAL_WAIT_CAP_SECONDS = 15.0
 _SYNC_ACTION_MAX_RETRY_ATTEMPTS = 2
+
+# ``listWorkbooks`` UX addition: Graph's drive-wide ``search`` can return a lot of hits on a
+# large/shared library; the dropdown only needs to be usable, not exhaustive, so results are
+# capped after sorting by label (a warning is logged when truncation actually drops items).
+_LIST_WORKBOOKS_MAX_ITEMS = 200
 
 # The run boundary (`Component.run`) maps exactly these exceptions to `UserException` (exit 1);
 # everything else propagates to exit 2 (design spec §6 "Error mapping"). Note this deliberately
@@ -149,9 +157,9 @@ class Component(ComponentBase):
     def _sync_action_client(self, account: Account) -> Iterator[GraphClient]:
         """Build a fast-fail :class:`~client.graph_client.GraphClient` for a sync action.
 
-        Used by every sync action (``testConnection``, ``listLibraries``, ``search``,
-        ``getWorksheets``, ``createWorkbook``, ``createWorksheet``) so both phase 8 audit fixes
-        land in one shared place instead of being repeated six times:
+        Used by every sync action (``testConnection``, ``listLibraries``, ``listWorkbooks``,
+        ``listWorksheets``, ``search``, ``getWorksheets``, ``createWorkbook``, ``createWorksheet``)
+        so both phase 8 audit fixes land in one shared place instead of being repeated per action:
 
         - **IMPORTANT-5**: sync actions block the Keboola UI while they run, so the client is
           built with a reduced retry budget (:data:`_SYNC_ACTION_TOTAL_WAIT_CAP_SECONDS`/
@@ -189,21 +197,99 @@ class Component(ComponentBase):
 
     @sync_action("listLibraries")
     def list_libraries(self) -> list[SelectElement]:
-        """List the document libraries (drives) of the configured SharePoint site.
+        """List the target document library/libraries for `account`.
 
         Built from the **root** configuration only — reading row parameters here would tie the
         dropdown to whatever row happens to be open in the UI (the extractor's regression this
         component must not repeat, design spec §5).
+
+        Dispatches per account type (dropdown UX addition, mirroring
+        :func:`~client.drives.resolve_drive_id`'s own dispatch): ``sharepoint`` lists every
+        document library on the configured site (``account.site_url``, already required by the
+        ``Account`` model for this type); ``onedrive_for_business``/``private_onedrive`` have
+        exactly one library — the account's own default drive (``GET /me/drive``) — so a single
+        ``SelectElement`` is returned instead of an error. This used to unconditionally require a
+        SharePoint account (``account.tenant_id``/``account.site_url``); that guard no longer
+        applies now that the other two account types have their own, one-item answer.
         """
         account = self._load_account()
-        self._require_sharepoint_site(account)
         with self._sync_action_client(account) as client:
             try:
-                site_id = get_site_id(client, account.site_url)
-                drives = list_drives(client, site_id)
+                if account.account_type == AccountType.SHAREPOINT:
+                    site_id = get_site_id(client, account.site_url)
+                    drives = list_drives(client, site_id)
+                    return [SelectElement(label=drive["name"], value=drive["id"]) for drive in drives]
+                drive = client.get("/me/drive").json()
             except (AuthenticationError, GraphClientError) as exc:
                 raise UserException(str(exc)) from exc
-        return [SelectElement(label=drive["name"], value=drive["id"]) for drive in drives]
+        return [SelectElement(label="OneDrive (default)", value=drive["id"])]
+
+    @sync_action("listWorkbooks")
+    def list_workbooks(self) -> list[SelectElement]:
+        """List XLSX files in the row's target drive, for the ``workbook.file_id`` dropdown.
+
+        Reads the **row's** current ``workbook.drive_id`` (the UI sends the currently edited
+        row's form values — unlike ``listLibraries``, this genuinely needs to know which drive
+        the user just picked). When it's missing (dropdown opened before a library was chosen),
+        falls back the same way :func:`~client.drives.resolve_drive_id` does: the site's default
+        library for ``sharepoint``, the account's own default drive otherwise.
+
+        Uses Graph's drive-wide ``search`` (``q='.xlsx'``) rather than a recursive folder walk —
+        much cheaper for a large library — then filters to the exact XLSX mime type client-side
+        since ``search`` matching on ``q`` is a loose text match, not a mime-type filter. Results
+        are capped at :data:`_LIST_WORKBOOKS_MAX_ITEMS` after sorting by label (a warning is
+        logged only when that actually drops items).
+        """
+        account = self._load_account()
+        with self._sync_action_client(account) as client:
+            try:
+                drive_id = self._resolve_picker_drive_id(account, client)
+                items = list(
+                    client.get_paged(
+                        f"/drives/{drive_id}/root/search(q='.xlsx')",
+                        params={"$select": WORKBOOK_ITEM_SELECT},
+                    )
+                )
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
+        xlsx_items = [item for item in items if (item.get("file") or {}).get("mimeType") == XLSX_MIME_TYPE]
+        elements = sorted(
+            (SelectElement(label=_format_workbook_label(item), value=item["id"]) for item in xlsx_items),
+            key=lambda element: element.label,
+        )
+        if len(elements) > _LIST_WORKBOOKS_MAX_ITEMS:
+            logger.warning(
+                "listWorkbooks found %d XLSX file(s); truncating the dropdown to the first %d (sorted by label).",
+                len(elements),
+                _LIST_WORKBOOKS_MAX_ITEMS,
+            )
+            elements = elements[:_LIST_WORKBOOKS_MAX_ITEMS]
+        return elements
+
+    @sync_action("listWorksheets")
+    def list_worksheets(self) -> list[SelectElement]:
+        """List a workbook's worksheets, for the ``worksheet.id`` dropdown.
+
+        ``workbook`` accepts either targeting form (ids or path, same partial validation
+        ``getWorksheets`` uses) and is never created here (``create_if_missing=False`` — same
+        reasoning as ``getWorksheets``: populating a dropdown should never have the side effect
+        of conjuring the workbook it's supposed to list sheets from). Uses
+        :func:`~client.excel_writer.list_worksheets` — the header-free half of
+        :func:`~client.excel_writer.list_worksheets_with_headers` — since a dropdown only needs
+        each sheet's id/name/visibility, never its data.
+        """
+        account = self._load_account()
+        workbook = self._load_workbook_param()
+        with self._sync_action_client(account) as client:
+            try:
+                drive_id, file_id, _created = resolve_workbook(client, account, workbook, create_if_missing=False)
+                worksheets = list_worksheets_summary(client, drive_id, file_id)
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
+        return [
+            SelectElement(label=_format_worksheet_label(item), value=item["id"])
+            for item in worksheets
+        ]
 
     @sync_action("search")
     def search(self) -> dict[str, Any]:
@@ -509,13 +595,22 @@ class Component(ComponentBase):
         except ValidationError as e:
             raise UserException(f"Invalid account configuration: {_format_validation_error(e)}") from e
 
-    @staticmethod
-    def _require_sharepoint_site(account: Account) -> None:
-        if not account.tenant_id or not account.site_url:
-            raise UserException(
-                "listLibraries requires a SharePoint account with both account.tenant_id and "
-                "account.site_url configured."
-            )
+    def _resolve_picker_drive_id(self, account: Account, client: GraphClient) -> str:
+        """Resolve the drive ``listWorkbooks`` should search, for `_load_workbook_param`'s sibling.
+
+        Prefers the row's own currently-configured ``workbook.drive_id`` (the UI sends the
+        currently-edited row's form values, unlike root-only actions such as ``listLibraries``);
+        falls back to the same per-account-type default :func:`~client.drives.resolve_drive_id`
+        uses when it's not set yet (dropdown opened before a library was picked): the SharePoint
+        site's default library, or the account's own default drive otherwise.
+        """
+        workbook_params = self.configuration.parameters.get("workbook")
+        if isinstance(workbook_params, dict) and workbook_params.get("drive_id"):
+            return workbook_params["drive_id"]
+        if account.account_type == AccountType.SHAREPOINT:
+            site_id = get_site_id(client, account.site_url)
+            return client.get(f"/sites/{site_id}/drive").json()["id"]
+        return client.get("/me/drive").json()["id"]
 
     def _build_token_provider(self, account: Account) -> TokenProvider:
         """Build the `RefreshTokenProvider` for `account`, from OAuth credentials + state.
@@ -555,6 +650,33 @@ class Component(ComponentBase):
 def _format_validation_error(error: ValidationError) -> str:
     messages = [f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}" for err in error.errors()]
     return "; ".join(messages)
+
+
+def _format_workbook_label(item: dict[str, Any]) -> str:
+    """Build a human-readable ``listWorkbooks`` label: the item's folder path + its name.
+
+    ``item["parentReference"]["path"]`` is Graph's ``"/drives/{id}/root:/folder/sub"``-style
+    string, present only when the item isn't at the drive root (same shape
+    ``client.excel_writer._format_path_segments`` reads for the ``search`` sync action's "path"
+    field) — everything after the literal ``"root:/"`` marker is the folder tail shown to the
+    user; a root-level file has no tail at all.
+    """
+    parent_path = (item.get("parentReference") or {}).get("path") or ""
+    tail = parent_path.split("root:/", 1)[1] if "root:/" in parent_path else ""
+    name = item.get("name", "")
+    return f"{tail}/{name}" if tail else name
+
+
+def _format_worksheet_label(item: dict[str, Any]) -> str:
+    """Build a ``listWorksheets`` label: the sheet's name, plus v1-parity ``" (hidden)"`` suffix.
+
+    Mirrors :func:`~client.excel_writer.list_worksheets_with_headers`'s own ``title`` field
+    (same suffix, same "visible" string check) so the two v1-parity-adjacent surfaces agree on
+    what a hidden sheet looks like.
+    """
+    name = item["name"]
+    visible = str(item.get("visibility", "")).lower() == "visible"
+    return name if visible else f"{name} (hidden)"
 
 
 def _rewrite_csv(source_path: str, csv_options: CsvOptions) -> str:

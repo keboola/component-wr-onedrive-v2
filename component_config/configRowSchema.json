@@ -144,25 +144,41 @@
           "title": "Workbook Path",
           "description": "Path to the target workbook; created automatically when missing",
           "options": {
-            "tooltip": "Accepts a library-relative path (/Reports/data.xlsx), drive://{driveId}/path, site://{siteName}/path, or an https:// sharing link. Use the search sync action to check whether it already exists. Leave empty and use Drive ID + File ID instead for advanced targeting by id."
+            "tooltip": "Accepts a library-relative path (/Reports/data.xlsx), drive://{driveId}/path, site://{siteName}/path, or an https:// sharing link. Use the search sync action to check whether it already exists. Leave empty and use the Library + Workbook pickers below instead."
           },
           "propertyOrder": 1
         },
         "drive_id": {
           "type": "string",
-          "title": "Drive ID",
-          "description": "Advanced targeting: drive ID of an existing workbook",
+          "title": "Library",
+          "format": "select",
+          "enum": [],
+          "description": "Advanced targeting: document library of an existing workbook",
           "options": {
-            "tooltip": "Use together with File ID instead of Path — never combine with Path. Obtain both values from the search sync action."
+            "tooltip": "Pick the document library that contains the workbook, then pick the workbook itself below — never combine with Path. For Private OneDrive/OneDrive for Business accounts this is always the account's own default drive.",
+            "async": {
+              "label": "List Libraries",
+              "action": "listLibraries",
+              "autoload": true
+            }
           },
           "propertyOrder": 2
         },
         "file_id": {
           "type": "string",
-          "title": "File ID",
-          "description": "Advanced targeting: file ID of an existing workbook",
+          "title": "Workbook",
+          "format": "select",
+          "enum": [],
+          "description": "Advanced targeting: an existing workbook in the selected library",
           "options": {
-            "tooltip": "Use together with Drive ID instead of Path — never combine with Path."
+            "tooltip": "Lists the XLSX files found in the Library selected above — never combine with Path.",
+            "async": {
+              "label": "List Workbooks",
+              "action": "listWorkbooks",
+              "autoload": [
+                "parameters.workbook.drive_id"
+              ]
+            }
           },
           "propertyOrder": 3
         },
@@ -202,9 +218,20 @@
         "id": {
           "type": "string",
           "title": "Worksheet ID",
-          "description": "Advanced targeting: worksheet ID from the getWorksheets sync action",
+          "format": "select",
+          "enum": [],
+          "description": "Advanced targeting: an existing worksheet in the workbook configured above",
           "options": {
-            "tooltip": "Mutually exclusive with Position — set only one of the two. Combine with Name to rename the worksheet."
+            "tooltip": "Lists the worksheets found in the Workbook configured above (Path, or Library + Workbook). Mutually exclusive with Position — set only one of the two. Combine with Name to rename the worksheet.",
+            "async": {
+              "label": "List Worksheets",
+              "action": "listWorksheets",
+              "autoload": [
+                "parameters.workbook.path",
+                "parameters.workbook.drive_id",
+                "parameters.workbook.file_id"
+              ]
+            }
           },
           "propertyOrder": 2
         },

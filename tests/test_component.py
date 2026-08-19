@@ -171,17 +171,31 @@ class TestListLibraries:
             SelectElement(label="Marketing Assets", value="drive-2"),
         ]
 
-    def test_missing_site_url_raises_user_exception_without_any_network_call(self, tmp_path):
+    def test_business_account_returns_the_default_drive_as_a_single_element(self, tmp_path):
+        # onedrive_for_business (and private_onedrive) have exactly one library: the account's
+        # own default drive — no site/tenant needed, no more "requires SharePoint" error.
         parameters = {"account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"}}
         comp = _build_component(tmp_path, parameters)
         fake_client = MagicMock()
+        fake_client.get.return_value.json.return_value = {"id": "default-drive-1"}
 
-        with mock.patch("component.GraphClient", return_value=fake_client), pytest.raises(
-            UserException, match="SharePoint"
-        ):
-            comp.list_libraries()
+        with mock.patch("component.GraphClient", return_value=fake_client):
+            result = comp.list_libraries()
 
-        fake_client.get.assert_not_called()
+        fake_client.get.assert_called_once_with("/me/drive")
+        assert result == [SelectElement(label="OneDrive (default)", value="default-drive-1")]
+
+    def test_private_onedrive_account_returns_the_default_drive_as_a_single_element(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get.return_value.json.return_value = {"id": "default-drive-2"}
+
+        with mock.patch("component.GraphClient", return_value=fake_client):
+            result = comp.list_libraries()
+
+        fake_client.get.assert_called_once_with("/me/drive")
+        assert result == [SelectElement(label="OneDrive (default)", value="default-drive-2")]
 
     def test_ignores_row_parameters_built_from_root_config_only(self, tmp_path):
         parameters = {
@@ -204,6 +218,203 @@ class TestListLibraries:
             result = comp.list_libraries()
 
         assert result == [SelectElement(label="Documents", value="d1")]
+
+
+class TestListWorkbooks:
+    """`listWorkbooks` (Excel workbook-picker UX addition): lists XLSX files in the row's
+    target drive via Graph's drive-wide `search`, filtering out non-XLSX hits client-side (`q`
+    matching is a loose text match, not a mime-type filter)."""
+
+    def _items(self, count: int) -> list[dict]:
+        return [
+            {
+                "id": f"file-{i}",
+                "name": f"report{i}.xlsx",
+                "file": {"mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                "parentReference": {"path": "/drives/drive-1/root:/Reports"},
+            }
+            for i in range(count)
+        ]
+
+    def test_uses_row_drive_id_and_filters_by_mime_type_and_labels_by_path(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"drive_id": "drive-1"},
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get_paged.return_value = iter(
+            [
+                {
+                    "id": "file-xlsx",
+                    "name": "budget.xlsx",
+                    "file": {"mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                    "parentReference": {"path": "/drives/drive-1/root:/Reports/2026"},
+                },
+                {
+                    "id": "file-not-xlsx",
+                    "name": "budget.xlsx.bak",
+                    "file": {"mimeType": "application/octet-stream"},
+                    "parentReference": {"path": "/drives/drive-1/root:/Reports"},
+                },
+            ]
+        )
+
+        with mock.patch("component.GraphClient", return_value=fake_client):
+            result = comp.list_workbooks()
+
+        called_url = fake_client.get_paged.call_args.args[0]
+        assert called_url == "/drives/drive-1/root/search(q='.xlsx')"
+        assert result == [SelectElement(label="Reports/2026/budget.xlsx", value="file-xlsx")]
+
+    def test_falls_back_to_site_default_drive_for_sharepoint_when_drive_id_missing(self, tmp_path):
+        parameters = {
+            "account": {
+                "account_type": "sharepoint",
+                "tenant_id": "tenant-1",
+                "site_url": "https://contoso.sharepoint.com/sites/marketing",
+            },
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get.return_value.json.return_value = {"id": "site-default-drive"}
+        fake_client.get_paged.return_value = iter([])
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.get_site_id", return_value="site-1") as mock_get_site_id,
+        ):
+            comp.list_workbooks()
+
+        mock_get_site_id.assert_called_once_with(fake_client, "https://contoso.sharepoint.com/sites/marketing")
+        fake_client.get.assert_called_once_with("/sites/site-1/drive")
+        called_url = fake_client.get_paged.call_args.args[0]
+        assert called_url == "/drives/site-default-drive/root/search(q='.xlsx')"
+
+    def test_falls_back_to_me_drive_for_business_and_private_when_drive_id_missing(self, tmp_path):
+        parameters = {"account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get.return_value.json.return_value = {"id": "my-default-drive"}
+        fake_client.get_paged.return_value = iter([])
+
+        with mock.patch("component.GraphClient", return_value=fake_client):
+            comp.list_workbooks()
+
+        fake_client.get.assert_called_once_with("/me/drive")
+        called_url = fake_client.get_paged.call_args.args[0]
+        assert called_url == "/drives/my-default-drive/root/search(q='.xlsx')"
+
+    def test_results_are_sorted_by_label(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {"drive_id": "drive-1"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get_paged.return_value = iter(
+            [
+                {
+                    "id": "file-b",
+                    "name": "banana.xlsx",
+                    "file": {"mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                    "parentReference": {},
+                },
+                {
+                    "id": "file-a",
+                    "name": "apple.xlsx",
+                    "file": {"mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                    "parentReference": {},
+                },
+            ]
+        )
+
+        with mock.patch("component.GraphClient", return_value=fake_client):
+            result = comp.list_workbooks()
+
+        assert [element.value for element in result] == ["file-a", "file-b"]
+
+    def test_truncates_and_warns_past_the_cap(self, tmp_path, caplog):
+        parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {"drive_id": "drive-1"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get_paged.return_value = iter(self._items(250))
+
+        with mock.patch("component.GraphClient", return_value=fake_client), caplog.at_level("WARNING"):
+            result = comp.list_workbooks()
+
+        assert len(result) == 200
+        assert any("truncat" in message.lower() for message in caplog.messages)
+
+    def test_no_truncation_warning_under_the_cap(self, tmp_path, caplog):
+        parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {"drive_id": "drive-1"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get_paged.return_value = iter(self._items(5))
+
+        with mock.patch("component.GraphClient", return_value=fake_client), caplog.at_level("WARNING"):
+            result = comp.list_workbooks()
+
+        assert len(result) == 5
+        assert not any("truncat" in message.lower() for message in caplog.messages)
+
+
+class TestListWorksheets:
+    """`listWorksheets` (Excel worksheet-picker UX addition): lists a workbook's sheets (no
+    per-sheet header read) via `client.excel_writer.list_worksheets`, labeling hidden sheets the
+    same way `getWorksheets` does."""
+
+    def test_returns_labels_with_hidden_suffix_sorted_by_position(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"drive_id": "drive-1", "file_id": "file-1"},
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        worksheets = [
+            {"id": "ws-1", "name": "Sheet1", "position": 0, "visibility": "Visible"},
+            {"id": "ws-2", "name": "Sheet2", "position": 1, "visibility": "Hidden"},
+        ]
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch(
+                "component.resolve_workbook", return_value=("drive-1", "file-1", False)
+            ) as mock_resolve_workbook,
+            mock.patch("component.list_worksheets_summary", return_value=worksheets) as mock_list_worksheets,
+        ):
+            result = comp.list_worksheets()
+
+        mock_resolve_workbook.assert_called_once()
+        assert mock_resolve_workbook.call_args.kwargs["create_if_missing"] is False
+        mock_list_worksheets.assert_called_once_with(fake_client, "drive-1", "file-1")
+        assert result == [
+            SelectElement(label="Sheet1", value="ws-1"),
+            SelectElement(label="Sheet2 (hidden)", value="ws-2"),
+        ]
+
+    def test_accepts_path_mode_workbook(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"path": "/book.xlsx"},
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.resolve_workbook", return_value=("drive-2", "file-2", False)) as mock_resolve,
+            mock.patch("component.list_worksheets_summary", return_value=[]) as mock_list_worksheets,
+        ):
+            result = comp.list_worksheets()
+
+        assert mock_resolve.call_args.args[2].path == "/book.xlsx"
+        mock_list_worksheets.assert_called_once_with(fake_client, "drive-2", "file-2")
+        assert result == []
+
+    def test_missing_workbook_raises_invalid_workbook_configuration(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(UserException, match="Invalid workbook configuration"):
+            comp.list_worksheets()
 
 
 class TestBuildTokenProvider:

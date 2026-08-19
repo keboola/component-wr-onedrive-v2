@@ -208,6 +208,58 @@
     }
   },
   {
+    "name": "16_listWorkbooks",
+    "description": "Sync action listWorkbooks (dropdown UX addition): drive-wide search(q='.xlsx') on the SharePoint site's default library, filtered to real XLSX items and labeled by folder path + name. workbook.drive_id is the site's own default document library (the real, non-secret drive id shared with the other SharePoint-targeting scenarios in this file) — finds report.xlsx (11_createWorkbook), rename.xlsx (33), and overwrite.xlsx (31/32).",
+    "config": {
+      "action": "listWorkbooks",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
+        },
+        "workbook": {
+          "drive_id": "b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "17_listWorksheets",
+    "description": "Sync action listWorksheets (dropdown UX addition): lists the worksheets of the workbook 11_createWorkbook created (same path), by this point also carrying the 'VcrTestSheet' worksheet 14_createWorksheet added — exercises the header-free listing helper and the ' (hidden)' label suffix logic (neither sheet is hidden here, but the field is present in the recorded output).",
+    "config": {
+      "action": "listWorksheets",
+      "parameters": {
+        "account": {
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
+        },
+        "workbook": {
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+        }
+      },
+      "authorization": {
+        "oauth_api": {
+          "credentials": {
+            "appKey": "DUMMY_APP_KEY",
+            "#appSecret": "DUMMY_APP_SECRET",
+            "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "20_file_conflict_replace",
     "description": "Run mode=file: simple PUT upload (small file, below the real SIMPLE_UPLOAD_THRESHOLD), conflict_behavior=replace, targeting the SharePoint site's own default drive. Creates the shared target file that 21_file_conflict_fail/22_file_conflict_rename depend on (recorded in this file order) \u2014 also exercises nested folder creation via destination.folder_path.",
     "config": {

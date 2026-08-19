@@ -61,6 +61,17 @@ Scope decision (2026-08-18): record against **Business + SharePoint account type
 Personal-OneDrive flows are already covered by the mocked `GraphFake` suite
 (`tests/test_functional_http.py`) — no personal-account cassettes are recorded.
 
+**Update (2026-08-19, `listLibraries`/`listWorkbooks`/`listWorksheets` dropdown UX addition):**
+`GET /me/drive` (used by `listLibraries`'s new `onedrive_for_business`/`private_onedrive`
+default-drive branch, and by `listWorkbooks`'s/`_resolve_picker_drive_id`'s fallback for those
+account types) `403`s with `notAllowed` against this test tenant's authorized user — it has no
+provisioned personal OneDrive. That business/private-account branch is therefore **not
+recordable here** and is covered by mocked unit tests only
+(`tests/test_component.py::TestListLibraries`/`TestListWorkbooks`); no cassette exists for it, and
+none should be recorded as if the call actually succeeded. `listWorkbooks`/`listWorksheets`
+themselves are recorded against the SharePoint account (16/17 above), same as every other
+scenario in this scope decision.
+
 ### After recording — run the validation gate
 
 `pytest` passing after a recording is not sufficient proof the cassettes are good — a recording
@@ -96,6 +107,8 @@ signed-URL params) — see `vcr-validation-gate.md`.
 | 13 | `getWorksheets` | Lists the default worksheet of the workbook 11 created |
 | 14 | `createWorksheet` | Adds a new named worksheet |
 | 15 | `createWorksheet` (conflict) | Same name as 14 → `UserException`, exit 1 (deliberate failure) |
+| 16 | `listWorkbooks` | Dropdown UX addition: drive-wide `search(q='.xlsx')` on the site's default library (`workbook.drive_id`), filtered to XLSX items, labeled by folder path + name |
+| 17 | `listWorksheets` | Dropdown UX addition: lists the worksheets of the workbook 11 created (by now also carrying 14's `VcrTestSheet`) via the header-free listing helper |
 | 20 | `file` mode, `replace` | Simple `PUT`; creates the shared target 21/22 depend on |
 | 21 | `file` mode, `fail` | Same target as 20 → Graph 409 → `UserException`, exit 1 (deliberate failure) |
 | 22 | `file` mode, `rename` | Same target again → Graph auto-renames |
@@ -122,5 +135,10 @@ rm -rf tests/functional/14_createWorksheet
 uv run python scripts/record_vcr_cassettes.py
 ```
 
-(scenarios with dependents — e.g. 20/21/22, or 11/12/13/14/15 — should be re-recorded together;
-delete the whole dependent chain's directories, or just pass `--regenerate` to redo everything).
+(scenarios with dependents — e.g. 20/21/22, or 11/12/13/14/15/16/17 (16/17 both target the
+workbook 11 creates) — should be re-recorded together; delete the whole dependent chain's
+directories, or just pass `--regenerate` to redo everything. Re-recording only a *later* member of
+a chain without its earlier dependents — e.g. deleting just 16/17 — will record against a
+workbook path that was never actually (re-)created live under the new run id, since the earlier,
+already-cassetted steps that create it get skipped; the live call 404s and the recorded cassette
+captures that failure instead of the intended scenario).

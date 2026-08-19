@@ -597,15 +597,29 @@ def _read_header_row(
     return [str(cell) for cell in text_rows[0]] if text_rows else []
 
 
+def list_worksheets(client: GraphClient, drive_id: str, file_id: str) -> list[dict[str, Any]]:
+    """List a workbook's worksheets (``id``/``name``/``position``/``visibility``), position-sorted.
+
+    Sessionless (sync actions never open a workbook session — v1 doesn't either). This is the
+    lightweight half of :func:`list_worksheets_with_headers` (no per-sheet header read) — shared
+    by the ``listWorksheets`` sync action (workbook/worksheet dropdown UX addition), which only
+    needs enough to build a ``SelectElement`` per sheet, never the header row.
+    """
+    worksheets = _list_worksheets(client, drive_id, file_id, headers={})
+    worksheets.sort(key=lambda item: item["position"])
+    return worksheets
+
+
 def list_worksheets_with_headers(client: GraphClient, drive_id: str, file_id: str) -> list[dict[str, Any]]:
     """List every worksheet in a workbook with its normalized header (``getWorksheets``, §5).
 
     Sessionless (sync actions never open a workbook session — v1 doesn't either) and
     position-sorted, matching v1's ``Api::getSheets`` output shape exactly (field names, ``"
-    (hidden)"`` title suffix, ASCII-normalized ``header`` via :mod:`client.headers`).
+    (hidden)"`` title suffix, ASCII-normalized ``header`` via :mod:`client.headers`). Built on top
+    of :func:`list_worksheets` — the listing + sort is identical, this just adds the per-sheet
+    header read.
     """
-    worksheets = _list_worksheets(client, drive_id, file_id, headers={})
-    worksheets.sort(key=lambda item: item["position"])
+    worksheets = list_worksheets(client, drive_id, file_id)
 
     result: list[dict[str, Any]] = []
     for item in worksheets:

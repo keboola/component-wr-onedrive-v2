@@ -1,5 +1,5 @@
 {
-  "action": "search",
+  "action": "listWorksheets",
   "parameters": {
     "account": {
       "account_type": "sharepoint",
