@@ -136,7 +136,7 @@ Task status: `[ ]` open · `[x]` done (checked only after the task's verificatio
   `uv run ruff check .` instead; see the Task 10 report for detail.
 
 ## Task 11 — VCR harness + cassettes · owner: generate-vcr-tests / component-test
-- [ ] Greenfield VCR setup (extractor has none): record against the Keboola M365 test tenant —
+- [x] Greenfield VCR setup (extractor has none): record against the Keboola M365 test tenant —
   token refresh, site+drive resolution, simple PUT per conflict behavior, upload session with
   forced small threshold incl. resume, folder creation, Excel session/patch/close, worksheet
   create+rename, every sync action. Sanitizers: tokens, client_secret, tenant/site/drive GUIDs,

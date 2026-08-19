@@ -7,8 +7,8 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         }
       },
       "authorization": {
@@ -30,8 +30,8 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         }
       },
       "authorization": {
@@ -53,11 +53,11 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/reports/does-not-exist.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/reports/does-not-exist.xlsx"
         }
       },
       "authorization": {
@@ -79,11 +79,11 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
         }
       },
       "authorization": {
@@ -105,11 +105,11 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
         }
       },
       "authorization": {
@@ -131,11 +131,11 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
         }
       },
       "authorization": {
@@ -157,11 +157,11 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
         },
         "worksheet": {
           "name": "VcrTestSheet"
@@ -186,11 +186,11 @@
       "parameters": {
         "account": {
           "account_type": "sharepoint",
-          "tenant_id": "DUMMY_TENANT_ID",
-          "site_url": "https://DUMMY.sharepoint.com/sites/DUMMY"
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/reports/report.xlsx"
         },
         "worksheet": {
           "name": "VcrTestSheet"
@@ -209,13 +209,14 @@
   },
   {
     "name": "20_file_conflict_replace",
-    "description": "Run mode=file: simple PUT upload (small file, below the real SIMPLE_UPLOAD_THRESHOLD), conflict_behavior=replace. Creates the shared target file that 21_file_conflict_fail/22_file_conflict_rename depend on (recorded in this file order) \u2014 also exercises nested folder creation via destination.folder_path.",
+    "description": "Run mode=file: simple PUT upload (small file, below the real SIMPLE_UPLOAD_THRESHOLD), conflict_behavior=replace, targeting the SharePoint site's own default drive. Creates the shared target file that 21_file_conflict_fail/22_file_conflict_rename depend on (recorded in this file order) \u2014 also exercises nested folder creation via destination.folder_path.",
     "config": {
       "parameters": {
         "mode": "file",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "destination": {
           "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
@@ -249,8 +250,9 @@
       "parameters": {
         "mode": "file",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "destination": {
           "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
@@ -284,8 +286,9 @@
       "parameters": {
         "mode": "file",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "destination": {
           "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
@@ -319,8 +322,9 @@
       "parameters": {
         "mode": "file",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "destination": {
           "folder_path": "keboola-vcr-tests/__RUN_ID__/files",
@@ -354,8 +358,9 @@
       "parameters": {
         "mode": "table_csv",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "destination": {
           "folder_path": "keboola-vcr-tests/__RUN_ID__/tables",
@@ -392,11 +397,12 @@
       "parameters": {
         "mode": "table_excel",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/excel/overwrite.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/excel/overwrite.xlsx"
         },
         "worksheet": {
           "name": "Data"
@@ -431,11 +437,12 @@
       "parameters": {
         "mode": "table_excel",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/excel/overwrite.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/excel/overwrite.xlsx"
         },
         "worksheet": {
           "name": "Data"
@@ -470,11 +477,12 @@
       "parameters": {
         "mode": "table_excel",
         "account": {
-          "account_type": "onedrive_for_business",
-          "tenant_id": "DUMMY_TENANT_ID"
+          "account_type": "sharepoint",
+          "tenant_id": "00000000-0000-4000-8000-000000000000",
+          "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
         },
         "workbook": {
-          "path": "/keboola-vcr-tests/__RUN_ID__/excel/rename.xlsx"
+          "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/__RUN_ID__/excel/rename.xlsx"
         },
         "worksheet": {
           "position": 0,

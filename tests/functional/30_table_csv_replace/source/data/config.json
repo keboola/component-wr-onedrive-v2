@@ -1,0 +1,35 @@
+{
+  "parameters": {
+    "mode": "table_csv",
+    "account": {
+      "account_type": "sharepoint",
+      "tenant_id": "00000000-0000-4000-8000-000000000000",
+      "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
+    },
+    "destination": {
+      "folder_path": "keboola-vcr-tests/20260819081510/tables",
+      "conflict_behavior": "replace"
+    },
+    "csv": {
+      "file_name": "vcr_test_table.csv"
+    }
+  },
+  "authorization": {
+    "oauth_api": {
+      "credentials": {
+        "appKey": "DUMMY_APP_KEY",
+        "#appSecret": "DUMMY_APP_SECRET",
+        "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+      }
+    }
+  },
+  "storage": {
+    "input": {
+      "tables": [
+        {
+          "destination": "vcr_test_table.csv"
+        }
+      ]
+    }
+  }
+}

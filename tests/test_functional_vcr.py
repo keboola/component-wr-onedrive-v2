@@ -41,7 +41,9 @@ the "not recorded yet" state produce real, individually-named skips instead of j
 collected tests, so ``pytest``'s summary line makes the pending-recording count observable.
 """
 
+import contextlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -49,8 +51,19 @@ from keboola.datadirtest.vcr import VCRDataDirTester
 
 _TESTS_DIR = Path(__file__).parent
 FUNCTIONAL_DIR = str(_TESTS_DIR / "functional")
-COMPONENT_SCRIPT = str(_TESTS_DIR.parent / "src" / "component.py")
+_SRC_DIR = _TESTS_DIR.parent / "src"
+COMPONENT_SCRIPT = str(_SRC_DIR / "component.py")
 DEFINITIONS_PATH = _TESTS_DIR / "setup" / "configs.json"
+
+# Must match scripts/record_vcr_cassettes.py's SMALL_THRESHOLD_SCENARIOS/forced values exactly:
+# that scenario's cassette was recorded with client.uploader.SIMPLE_UPLOAD_THRESHOLD/CHUNK_SIZE
+# monkeypatched down to a few hundred bytes (so a small fixture file goes through
+# createUploadSession + chunked PUT instead of a simple PUT). Replay must apply the identical
+# patch — otherwise, with the real ~10 MiB threshold, the small fixture takes the simple-PUT path
+# instead and the outgoing request never matches the recorded chunked-upload interactions.
+_SMALL_THRESHOLD_SCENARIOS = frozenset({"23_upload_session_small_threshold"})
+_FORCED_SIMPLE_UPLOAD_THRESHOLD = 200
+_FORCED_CHUNK_SIZE = 100
 
 
 def _declared_scenario_names() -> list[str]:
@@ -62,6 +75,28 @@ def _declared_scenario_names() -> list[str]:
 
 def _has_cassette(test_name: str) -> bool:
     return (Path(FUNCTIONAL_DIR) / test_name / "source" / "data" / "cassettes" / "requests.json").exists()
+
+
+@contextlib.contextmanager
+def _forced_small_upload_threshold_if_needed(test_name: str):
+    """See ``_SMALL_THRESHOLD_SCENARIOS`` above — a no-op context for every other scenario."""
+    if test_name not in _SMALL_THRESHOLD_SCENARIOS:
+        yield
+        return
+
+    if str(_SRC_DIR) not in sys.path:
+        sys.path.insert(0, str(_SRC_DIR))
+    from client import uploader as uploader_module
+
+    original_threshold = uploader_module.SIMPLE_UPLOAD_THRESHOLD
+    original_chunk_size = uploader_module.CHUNK_SIZE
+    uploader_module.SIMPLE_UPLOAD_THRESHOLD = _FORCED_SIMPLE_UPLOAD_THRESHOLD
+    uploader_module.CHUNK_SIZE = _FORCED_CHUNK_SIZE
+    try:
+        yield
+    finally:
+        uploader_module.SIMPLE_UPLOAD_THRESHOLD = original_threshold
+        uploader_module.CHUNK_SIZE = original_chunk_size
 
 
 @pytest.mark.parametrize("test_name", _declared_scenario_names())
@@ -84,4 +119,5 @@ def test_vcr_functional(test_name):
         component_script=COMPONENT_SCRIPT,
         selected_tests=[test_name],
     )
-    tester.run()
+    with _forced_small_upload_threshold_if_needed(test_name):
+        tester.run()
