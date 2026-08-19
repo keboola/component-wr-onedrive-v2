@@ -195,9 +195,12 @@ class RefreshTokenProvider(TokenProvider):
                 stale_at=self._clock() + expires_in - REFRESH_SAFETY_MARGIN_SECONDS,
             )
             return
+        detail = ""
+        if last_error is not None and str(last_error):
+            detail = f" Microsoft says: {sanitize_exception_text(last_error)[:400]}"
         raise AuthenticationError(
             f"Unable to refresh the OneDrive/SharePoint access token: the refresh token was "
-            f"rejected by Microsoft (invalid_grant). {_REAUTHORIZE_HINT}"
+            f"rejected by Microsoft (invalid_grant).{detail} {_REAUTHORIZE_HINT}"
         ) from last_error
 
     def _request_token(self, refresh_token: str) -> dict[str, Any]:
