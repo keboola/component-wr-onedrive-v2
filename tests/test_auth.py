@@ -282,6 +282,27 @@ class TestAllCandidatesFail:
         with pytest.raises(AuthenticationError, match="Microsoft login endpoint"):
             provider.get_access_token()
 
+    def test_network_failure_message_has_query_strings_redacted(self):
+        # IMPORTANT-6 (phase 8 audit): a `requests.RequestException`'s message can embed the
+        # request URL verbatim — must go through `sanitize_exception_text`, not a raw f-string.
+        session = MagicMock()
+        session.post.side_effect = requests.exceptions.ConnectionError(
+            "failed to connect to https://login.microsoftonline.com/common/oauth2/v2.0/token?client_secret=leaked-secret"
+        )
+        provider = RefreshTokenProvider(
+            client_id="client-1",
+            client_secret="secret-1",
+            authority="common",
+            refresh_token_candidates=["refresh-state"],
+            session=session,
+        )
+
+        with pytest.raises(AuthenticationError) as exc_info:
+            provider.get_access_token()
+
+        assert "leaked-secret" not in str(exc_info.value)
+        assert "?<redacted>" in str(exc_info.value)
+
     def test_timeout_raises_authentication_error_without_trying_other_candidates(self):
         session = MagicMock()
         session.post.side_effect = requests.exceptions.Timeout("timed out")

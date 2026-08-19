@@ -451,6 +451,27 @@ class TestUploadSessionResume:
         assert client.put.call_count == MAX_RESUME_ATTEMPTS + 1
         client.delete.assert_called_once_with("https://upload.example/session", absolute=True, auth=False, retry=False)
 
+    def test_resume_status_check_failure_message_has_query_strings_redacted(self, tmp_path):
+        """IMPORTANT-6 (phase 8 audit): when the resume status check itself fails (not a 404,
+        so not a session restart), the raised `UploadSessionError` must sanitize that error's
+        message — a `GraphClientError` can otherwise reproduce a query string verbatim."""
+        size = 5
+        local_path = _make_sparse_file(tmp_path / "small.bin", SIMPLE_UPLOAD_THRESHOLD + size)
+        client = MagicMock()
+        client.post.return_value = _response(200, {"uploadUrl": "https://upload.example/session"})
+        client.put.side_effect = _graph_error(503)
+        client.get.side_effect = GraphClientError(
+            "status check failed: https://upload.example/session?tempauth=super-secret-token",
+            status_code=500,
+        )
+
+        with pytest.raises(UploadSessionError) as exc_info:
+            upload_file(client, "drive-1", "parent-1", local_path, "small.bin", "fail")
+
+        assert "super-secret-token" not in str(exc_info.value)
+        assert "?<redacted>" in str(exc_info.value)
+        client.delete.assert_called_once_with("https://upload.example/session", absolute=True, auth=False, retry=False)
+
     def test_abort_session_failure_does_not_log_the_upload_url(self, tmp_path, caplog):
         """`uploadUrl` is a pre-signed, credential-bearing URL — a failed best-effort cleanup
         DELETE must never log it (IMPORTANT-2)."""

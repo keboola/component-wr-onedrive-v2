@@ -25,6 +25,7 @@ import logging
 import os
 import re
 from datetime import datetime
+from typing import Any
 from urllib.parse import quote
 
 import requests
@@ -230,7 +231,7 @@ def upload_file(
     local_path: str,
     file_name: str,
     conflict_behavior: str,
-) -> dict:
+) -> dict[str, Any]:
     """Upload ``local_path`` into the folder identified by ``parent_item_id`` as ``file_name``.
 
     ``parent_item_id`` is a folder item id — the drive root's own id (for uploads directly into
@@ -258,7 +259,7 @@ def _simple_upload(
     local_path: str,
     file_name: str,
     conflict_behavior: str,
-) -> dict:
+) -> dict[str, Any]:
     encoded_name = quote(file_name, safe="")
     url = f"/drives/{drive_id}/items/{parent_item_id}:/{encoded_name}:/content"
     with open(local_path, "rb") as file_handle:
@@ -296,7 +297,7 @@ def _session_upload(
     size: int,
     file_name: str,
     conflict_behavior: str,
-) -> dict:
+) -> dict[str, Any]:
     upload_url = _create_upload_session(client, drive_id, parent_item_id, file_name, conflict_behavior)
     already_restarted = False
 
@@ -335,7 +336,7 @@ def _upload_chunks(
     size: int,
     file_name: str,
     conflict_behavior: str,
-) -> dict:
+) -> dict[str, Any]:
     """Stream ``file_handle`` to ``upload_url`` in :data:`CHUNK_SIZE` pieces from offset 0.
 
     Returns the final driveItem dict on success. Raises :class:`_SessionExpired` when the session
@@ -435,8 +436,12 @@ def _resume_after_failure(
         if status_exc.status_code == 404:
             raise _SessionExpired from status_exc
         _abort_session(client, upload_url)
+        # `sanitize_exception_text` (not the raw exception) — `upload_url` is a pre-signed,
+        # credential-bearing URL, and a `GraphClientError` message can otherwise reproduce the
+        # request URL (and its query string) verbatim (phase 8 audit IMPORTANT-6).
         raise UploadSessionError(
-            f"Uploading '{file_name}' failed and the resume status check also failed: {status_exc}"
+            f"Uploading '{file_name}' failed and the resume status check also failed: "
+            f"{sanitize_exception_text(status_exc)}"
         ) from status_exc
 
     next_ranges = status_response.json().get("nextExpectedRanges") or []

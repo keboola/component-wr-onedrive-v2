@@ -18,8 +18,11 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import requests
+
+from client.exceptions import sanitize_exception_text
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +112,11 @@ class RefreshTokenProvider(TokenProvider):
     trying further candidates, since it isn't necessarily specific to that refresh token.
 
     Rotation: every successful refresh returns a *new* refresh token (Microsoft always rotates
-    it). It is captured and exposed via :attr:`rotated_refresh_token` so the caller can persist
-    it to row state under the v1-compatible key ``#refreshed_auth_data``. The persisted value
-    should be the JSON encoding of a payload shaped like::
-
-        {"refresh_token": "<new refresh token>", "access_token": "<new access token>",
-         "expires_in": 3599}
-
-    (v1's state payload shape — only ``refresh_token`` is actually required on read; the other
-    keys are kept for parity/debuggability.)
+    it). It is captured and exposed via :attr:`rotated_refresh_token` so the caller
+    (``Component._persist_token_state``) can persist it to row state under the v1-compatible key
+    ``#refreshed_auth_data``, as ``json.dumps({"refresh_token": "<new refresh token>"})`` — the
+    only key ever read back (v1's state payload shape carried ``access_token``/``expires_in``
+    too, but nothing in this component reads them from state, so they're not written).
 
     No network call happens in ``__init__`` — the first refresh happens lazily on the first
     :meth:`get_access_token` call.
@@ -201,7 +200,7 @@ class RefreshTokenProvider(TokenProvider):
             f"rejected by Microsoft (invalid_grant). {_REAUTHORIZE_HINT}"
         ) from last_error
 
-    def _request_token(self, refresh_token: str) -> dict:
+    def _request_token(self, refresh_token: str) -> dict[str, Any]:
         try:
             response = self._session.post(
                 self._token_url,
@@ -215,9 +214,13 @@ class RefreshTokenProvider(TokenProvider):
                 timeout=30,
             )
         except requests.RequestException as exc:
+            # `sanitize_exception_text` redacts URL query strings — a `requests.RequestException`
+            # can otherwise embed the request URL (and, in principle, any query string it carried)
+            # verbatim in its message (phase 8 audit IMPORTANT-6).
             raise AuthenticationError(
-                f"Could not reach the Microsoft login endpoint to refresh the access token: {exc}. "
-                "This is likely a transient network issue; please retry the job."
+                f"Could not reach the Microsoft login endpoint to refresh the access token: "
+                f"{sanitize_exception_text(exc)}. This is likely a transient network issue; "
+                "please retry the job."
             ) from exc
         if response.status_code == 200:
             return response.json()
@@ -233,7 +236,7 @@ class RefreshTokenProvider(TokenProvider):
         )
 
 
-def _safe_json(response: requests.Response) -> dict:
+def _safe_json(response: requests.Response) -> dict[str, Any]:
     try:
         return response.json()
     except ValueError:
