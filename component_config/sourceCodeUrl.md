@@ -1,0 +1,1 @@
+https://github.com/keboola/component-wr-onedrive-v2
