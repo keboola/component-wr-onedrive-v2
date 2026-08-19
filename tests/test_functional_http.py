@@ -471,8 +471,10 @@ class TestExcelPrivateOnedriveGate:
         with pytest.raises(UserException, match="private_onedrive"):
             _run(comp, graph)  # exit 1
 
-        # `resolve_drive_id` always runs before mode dispatch, but nothing Excel-specific does.
-        assert graph.calls_for("GET") == [(_graph_url("/me/drive"), mock.ANY)]
+        # IMPORTANT-2 (phase 8 audit): Excel mode never resolves a drive id at all (it targets
+        # `workbook.{path,drive_id,file_id}` instead) — the account-type gate must raise before
+        # any Graph call, not just before an Excel-specific one.
+        assert graph.calls_for("GET") == []
 
 
 # ---------------------------------------------------------------------------------------------

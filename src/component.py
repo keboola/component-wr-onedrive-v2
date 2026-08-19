@@ -5,14 +5,16 @@ Design spec: ``docs/superpowers/specs/2026-08-17-wr-onedrive-v2-design.md`` §3 
 (configuration & sync actions), and §6 (run orchestration, error mapping).
 """
 
+import contextlib
 import csv
 import json
 import logging
 import os
-import re
 import sys
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from typing import Any
 
 from keboola.component.base import ComponentBase, sync_action
 from keboola.component.dao import FileDefinition, TableDefinition
@@ -53,225 +55,21 @@ from configuration import Account, AccountType, CsvOptions, Mode, RowConfig, Wor
 
 logger = logging.getLogger(__name__)
 
-# --- VCR cassette sanitizers (plan Task 11) -------------------------------------------------
-#
-# ``keboola.vcr``/``vcrpy`` are dev-only dependencies (see ``pyproject.toml``'s
-# ``[dependency-groups] dev`` — the production Docker stage runs ``uv sync --no-dev``), so this
-# import must never be unconditional at module level: it would break every real job. The
-# ``keboola.datadirtest`` VCR tester (``tests/test_functional_vcr.py``) picks up ``VCR_SANITIZERS``
-# automatically via ``keboola.datadirtest.vcr.tester._load_vcr_sanitizers_from_script``, which
-# itself tolerates a missing/empty list — so ``[]`` here is a safe, inert fallback outside tests.
+# VCR cassette sanitizers (plan Task 11) live in ``vcr_sanitizers.py`` — a separate module so
+# ``component.py`` doesn't carry ~220 lines of test-support code. ``keboola.vcr``/``vcrpy`` are
+# dev-only dependencies (see ``pyproject.toml``'s ``[dependency-groups] dev`` — the production
+# Docker stage runs ``uv sync --no-dev``), so this import must never be unconditional at module
+# level: it would break every real job. Importing ``vcr_sanitizers`` transitively imports
+# ``keboola.vcr`` (see that module's own docstring), so the same ``try/except ImportError`` that
+# used to guard the inline classes now guards this import instead — identical semantics. The
+# ``keboola.datadirtest`` VCR tester (``tests/test_functional_vcr.py``) picks up
+# ``VCR_SANITIZERS`` automatically via
+# ``keboola.datadirtest.vcr.tester._load_vcr_sanitizers_from_script``, which itself tolerates a
+# missing/empty list — so ``[]`` here is a safe, inert fallback outside tests.
 try:
-    from keboola.vcr import BaseSanitizer, DefaultSanitizer, QueryParamSanitizer
+    from vcr_sanitizers import VCR_SANITIZERS
 except ImportError:  # pragma: no cover - exercised only when keboola.vcr isn't installed (prod)
-    VCR_SANITIZERS: list = []
-else:
-    # Graph's error taxonomy uses a top-level ``error.code`` field (e.g. "itemNotFound",
-    # "nameAlreadyExists", "notAllowed") that has nothing to do with an OAuth authorization
-    # *code* (this component only ever uses the refresh-token grant — no auth-code flow exists
-    # to protect here). ``DefaultSanitizer.DEFAULT_SENSITIVE_FIELDS`` redacting bare ``"code"``
-    # would replace that value in every recorded error body, desyncing ``logs.json`` between
-    # record and replay for every deliberate-failure cassette (the component logs the real code
-    # verbatim). Passing ``sensitive_fields=`` to *our own* ``DefaultSanitizer`` instance below
-    # isn't enough: ``VCRRecorder.__init__`` always additionally builds its *own* internal
-    # ``DefaultSanitizer`` from ``create_default_sanitizer(secrets)`` using the unmodified class
-    # defaults (see ``keboola/vcr/recorder.py``), so the class attribute itself has to be patched
-    # — this runs once per test (``VCR_SANITIZERS`` is re-probed fresh per scaffolded test
-    # directory), is idempotent, and only affects sanitizer construction, never live requests.
-    if "code" in DefaultSanitizer.DEFAULT_SENSITIVE_FIELDS:
-        DefaultSanitizer.DEFAULT_SENSITIVE_FIELDS.remove("code")
-
-    class _StreamedBodySerializationFix(BaseSanitizer):
-        """Work around vcrpy ``Request``/keboola.vcr not supporting streamed (file-object) bodies
-        for cassette *serialization*, hit by every simple-PUT file/CSV/workbook-fixture upload in
-        this component (``requests.put(..., data=open(path, "rb"))``).
-
-        vcrpy's ``Request.__init__`` sets ``_was_file=True`` whenever the original body was a
-        file-like object (``hasattr(body, "read")``) — reading it into ``_body`` as plain bytes —
-        and independently also computes ``_was_iter`` (``_is_nonsequence_iterator(body)``); both
-        flags can end up set on the same ``Request`` for a streamed-file body (a real file object
-        is both readable *and* an iterator), even though only the ``_was_file`` branch actually
-        ran in ``__init__``. Its ``.body`` *property getter* checks them in order and, whichever
-        is set, always re-wraps ``_body`` on **every** access: ``BytesIO(self._body)`` if
-        ``_was_file``, or ``iter(self._body)`` if ``_was_iter`` — including inside
-        ``Request._to_dict()`` (``"body": self.body``), which is exactly what
-        ``VCRRecorder._append_interaction`` serializes to the cassette JSON. keboola.vcr's custom
-        ``_BytesEncoder`` only knows how to encode ``bytes`` — not a ``BytesIO`` (``TypeError:
-        Object of type BytesIO is not JSON serializable``) and not a ``bytes_iterator`` (the same
-        error, different type name) either. This is independent of any sanitizer's own body
-        handling (reproduces with an empty ``VCR_SANITIZERS`` list too) — clearing *both* flags
-        is required; clearing only ``_was_file`` still leaves the ``_was_iter`` branch active.
-
-        Clearing both flags here (after the real, live upload has already happened — this only
-        affects what gets *serialized*) makes every later ``.body`` access, including inside
-        ``_to_dict()``, fall through to ``return self._body`` (plain bytes) instead. Placed
-        **last** in ``VCR_SANITIZERS`` (after ``_GuidRedactor``/``_IdentityFieldRedactor``, which
-        rely on seeing the original ``_was_file=True`` to correctly skip redacting uploaded file
-        *content* — see ``_SafeBodyRedactor``) so nothing downstream needs to special-case it.
-        """
-
-        def before_record_request(self, request):
-            if getattr(request, "_was_file", False) or getattr(request, "_was_iter", False):
-                request._was_file = False
-                request._was_iter = False
-            return request
-
-    class _SafeBodyRedactor(BaseSanitizer):
-        """Base class for sanitizers that rewrite request/response body *text*.
-
-        Provides ``_body_text``/``_apply_text`` helpers that read/write a request's body via its
-        **raw** ``_body`` attribute rather than the ``.body`` property, and skip entirely when
-        it isn't plain ``str``/``bytes``.
-
-        This matters for every simple-PUT file/CSV/workbook-fixture upload in this component
-        (``requests.put(..., data=open(path, "rb"))``): vcrpy's ``Request`` marks
-        ``_was_file=True`` for those and its ``.body`` *getter* unconditionally re-wraps whatever
-        ``_body`` currently holds in a fresh ``BytesIO(...)`` on every access —
-        ``BytesIO(an_already_BytesIO_instance)`` raises ``TypeError``. keboola.vcr's own
-        ``BodyFieldSanitizer`` hits exactly this: its body-type check falls through unchanged for
-        a non-str/bytes value and writes that (a ``BytesIO``) straight back into ``_body`` via
-        the setter, permanently corrupting it for every sanitizer (and the cassette-serialization
-        step) that touches ``.body`` afterward — which is why it's not used here at all. Reading
-        ``_body`` directly sidesteps the rewrap entirely; skipping non-str/bytes bodies is exactly
-        the desired behavior anyway (streamed file *content* needs no text redaction).
-
-        Also skips entirely whenever ``_was_file`` is set (regardless of what ``_body`` currently
-        looks like): those are our own uploaded file fixtures (CSV/text/xlsx), never containing
-        secrets, and a lossy utf-8 decode/re-encode round-trip would otherwise silently mangle
-        binary (e.g. ``.xlsx``) content in the cassette. Harmless either way for *matching* —
-        ``VCRRecorder``'s default ``match_on`` never includes body content — but there is no
-        reason to touch it.
-        """
-
-        def _body_text(self, request) -> str | None:
-            if getattr(request, "_was_file", False):
-                return None
-            raw_body = getattr(request, "_body", None)
-            if isinstance(raw_body, bytes):
-                return raw_body.decode("utf-8", errors="ignore")
-            if isinstance(raw_body, str):
-                return raw_body
-            return None
-
-        def _redact_request_body(self, request, transform) -> None:
-            text = self._body_text(request)
-            if text is not None:
-                request.body = transform(text).encode("utf-8")
-
-        @staticmethod
-        def _redact_response_body(response, transform) -> None:
-            body = response.get("body")
-            if not (isinstance(body, dict) and "string" in body):
-                return
-            value = body["string"]
-            if isinstance(value, bytes):
-                body["string"] = transform(value.decode("utf-8", errors="ignore")).encode("utf-8")
-            elif isinstance(value, str):
-                body["string"] = transform(value)
-
-    class _GuidRedactor(_SafeBodyRedactor):
-        """Collapse every GUID-shaped substring (request URIs/bodies, response bodies) to one
-        fixed placeholder — the OAuth ``tenant_id`` (embedded directly in every token-refresh
-        URL, built from ``account.tenant_id`` in config) and the two GUIDs inside a SharePoint
-        composite site id (``"{hostname},{guid},{guid}"``, a value the component reads from one
-        response and reuses verbatim in later request URLs within the same run).
-
-        Uses a single **fixed** placeholder (not a stable-but-distinct-per-value mapping)
-        deliberately: ``before_record_request`` runs on *every* outgoing request, both when
-        recording and — critically — when replaying (vcrpy applies it before matching, so the
-        request the live component just built can line up against the sanitized cassette). A
-        replayed request built from an *already-redacted* response (e.g. the site-id case above)
-        would otherwise get **re-redacted** with a fresh replay-time sanitizer instance that has
-        no memory of "I already assigned this value a placeholder", assigning it a *different*
-        one and breaking the match. A single fixed placeholder sidesteps this: it's a fixed point
-        of the substitution (redacting an already-redacted placeholder is a no-op), so the same
-        text survives being sanitized twice without drifting.
-
-        ``tests/setup/configs.json``'s dummy ``account.tenant_id`` is deliberately set to this
-        exact placeholder value, so after the scaffolder restores ``config.json`` to its dummy
-        values post-recording, replay's config-constructed token URL already matches what's
-        stored in the cassette — no secrets-file-aware sanitizer needed for tenant_id at all.
-
-        Deliberately **not** ``scrub_before_read``: that flavor scrubs the response the *live*
-        component reads mid-recording, which would send the placeholder back to the real Graph
-        API on the very next call (a 404), breaking the live recording run itself.
-        """
-
-        PLACEHOLDER = "00000000-0000-4000-8000-000000000000"
-        _GUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-
-        def _sanitize_text(self, text: str) -> str:
-            return self._GUID_RE.sub(self.PLACEHOLDER, text)
-
-        def before_record_request(self, request):
-            if hasattr(request, "uri"):
-                request.uri = self._sanitize_text(request.uri)
-            self._redact_request_body(request, self._sanitize_text)
-            return request
-
-        def before_record_response(self, response):
-            self._redact_response_body(response, self._sanitize_text)
-            return response
-
-    class _IdentityFieldRedactor(_SafeBodyRedactor):
-        """Redact user-identity JSON fields (UPN/mail/display name/...) in response bodies.
-
-        A hand-rolled, minimal replacement for ``keboola.vcr``'s ``BodyFieldSanitizer`` — see
-        ``_SafeBodyRedactor`` for why that class isn't safe to use here. Response-only (these
-        identity fields appear in Graph *responses* — ``/me``, ``createdBy``/``lastModifiedBy``
-        blocks — never in this component's own outgoing request bodies).
-        """
-
-        FIELDS = frozenset({"userPrincipalName", "mail", "email", "displayName", "givenName", "surname"})
-        REPLACEMENT = "REDACTED"
-
-        def _redact_value(self, value):
-            if isinstance(value, dict):
-                return {k: (self.REPLACEMENT if k in self.FIELDS else self._redact_value(v)) for k, v in value.items()}
-            if isinstance(value, list):
-                return [self._redact_value(item) for item in value]
-            return value
-
-        def _sanitize_text(self, text: str) -> str:
-            try:
-                data = json.loads(text)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                return text
-            return json.dumps(self._redact_value(data))
-
-        def before_record_response(self, response):
-            self._redact_response_body(response, self._sanitize_text)
-            return response
-
-    VCR_SANITIZERS = [
-        # DefaultSanitizer's own defaults (minus "code", patched above) already cover
-        # access_token/refresh_token/client_secret/client_id/password/id_token/client_assertion
-        # in the form-encoded token-refresh body, the JSON token response, and query strings; and
-        # **all headers except content-type/content-length/accept** — which is what strips
-        # Authorization/Set-Cookie/Cookie/WWW-Authenticate.
-        DefaultSanitizer(),
-        # Upload-session ``uploadUrl`` values are pre-signed with a ``tempauth`` query-string
-        # token (SharePoint/OneDrive for Business) that grants unauthenticated write access to the
-        # session — must never leak into a committed cassette, in either the createUploadSession
-        # response body (where the URL first appears) or the subsequent chunk PUT/GET/DELETE
-        # request URIs that use it (design spec §4 "Uploads"; ``client/uploader.py`` never logs
-        # ``upload_url`` for the same reason).
-        QueryParamSanitizer(parameters=["tempauth"], replacement="REDACTED"),
-        # User principal name / mail / display name appear in `/me` (testConnection) and any
-        # Graph response embedding `createdBy`/`lastModifiedBy` identity blocks.
-        _IdentityFieldRedactor(),
-        _GuidRedactor(),
-        # Must run last — see its docstring for why.
-        _StreamedBodySerializationFix(),
-    ]
-# --- end VCR cassette sanitizers -----------------------------------------------------------
-#
-# Deliberately NOT sanitized: ``account.site_url`` (the SharePoint site host + path, e.g.
-# "keboolaconnection.sharepoint.com"/"allcompany") and Graph's opaque (non-GUID) drive/item ids
-# (e.g. "b!SYhH9ex...") are treated as non-secret resource identifiers recorded as-is — matching
-# the same reasoning `vcr-sanitizers.md` gives for a non-secret ``base_url`` host, and
-# `vcr-configs-format.md`'s coverage guidance ("Resource IDs ... are not secrets — use real
-# ones"). This is Keboola's own internal M365 test tenant, not customer data.
+    VCR_SANITIZERS: list[Any] = []
 
 # v1-compatible state key (design spec §2/§3) — holds the JSON-encoded payload produced by
 # `RefreshTokenProvider.rotated_refresh_token` (only `refresh_token` is actually read back).
@@ -283,6 +81,13 @@ STATE_KEY_REFRESHED_AUTH_DATA = "#refreshed_auth_data"
 # difference triggers a streaming rewrite (see `_rewrite_csv`).
 _STORAGE_DEFAULT_DELIMITER = ","
 _STORAGE_DEFAULT_ENCLOSURE = '"'
+
+# Sync actions block the Keboola UI while they run, so they must fail fast rather than inherit
+# `run()`'s full unattended-job retry budget (`DEFAULT_TOTAL_WAIT_CAP_SECONDS`/`MAX_RETRY_ATTEMPTS`
+# — 300s / 15 attempts, see `client.graph_client`). A couple of quick retries is still allowed;
+# a multi-minute hang is not (phase 8 audit, IMPORTANT-5).
+_SYNC_ACTION_TOTAL_WAIT_CAP_SECONDS = 15.0
+_SYNC_ACTION_MAX_RETRY_ATTEMPTS = 2
 
 # The run boundary (`Component.run`) maps exactly these exceptions to `UserException` (exit 1);
 # everything else propagates to exit 2 (design spec §6 "Error mapping"). Note this deliberately
@@ -323,16 +128,49 @@ class Component(ComponentBase):
 
         Token persistence happens in ``finally`` so a rotated refresh token is never lost even
         when the run itself fails (design spec §2/§3 — rotation must survive a failed job).
+        ``drive_id`` is resolved lazily inside whichever mode branch actually needs it (file/CSV
+        mode only — Excel mode targets its own ``workbook.{path,drive_id,file_id}`` and never
+        calls :func:`~client.drives.resolve_drive_id` at all, phase 8 audit IMPORTANT-2): doing
+        it unconditionally here cost every Excel-mode SharePoint run two extra, unused Graph
+        calls that could fail a run whose real target is elsewhere.
         """
         config = self._load_configuration()
         token_provider = self._build_token_provider(config.account)
         client = GraphClient(token_provider=token_provider)
         now = datetime.now(UTC)
         try:
-            drive_id = resolve_drive_id(client, config.account, config.destination.drive_id)
-            self._dispatch_mode(config, client, drive_id, now)
+            self._dispatch_mode(config, client, now)
         except _USER_FACING_ERRORS as exc:
             raise UserException(str(exc)) from exc
+        finally:
+            self._persist_token_state(token_provider)
+
+    @contextlib.contextmanager
+    def _sync_action_client(self, account: Account) -> Iterator[GraphClient]:
+        """Build a fast-fail :class:`~client.graph_client.GraphClient` for a sync action.
+
+        Used by every sync action (``testConnection``, ``listLibraries``, ``search``,
+        ``getWorksheets``, ``createWorkbook``, ``createWorksheet``) so both phase 8 audit fixes
+        land in one shared place instead of being repeated six times:
+
+        - **IMPORTANT-5**: sync actions block the Keboola UI while they run, so the client is
+          built with a reduced retry budget (:data:`_SYNC_ACTION_TOTAL_WAIT_CAP_SECONDS`/
+          :data:`_SYNC_ACTION_MAX_RETRY_ATTEMPTS`) instead of ``run()``'s full unattended-job
+          defaults, which could otherwise hang the UI for minutes on a rate-limited call.
+        - **IMPORTANT-1**: every sync action refreshes a token (Graph always rotates it on use)
+          but had no state file to persist it to before this fix — the rotation was silently
+          discarded, and the next run would keep presenting an already-consumed refresh token to
+          Microsoft. Persisting happens in ``finally`` so it survives whatever the caller does
+          with the yielded client, success or failure.
+        """
+        token_provider = self._build_token_provider(account)
+        client = GraphClient(
+            token_provider=token_provider,
+            total_wait_cap_seconds=_SYNC_ACTION_TOTAL_WAIT_CAP_SECONDS,
+            max_retry_attempts=_SYNC_ACTION_MAX_RETRY_ATTEMPTS,
+        )
+        try:
+            yield client
         finally:
             self._persist_token_state(token_provider)
 
@@ -343,11 +181,11 @@ class Component(ComponentBase):
         Built from the root configuration only (no row parameters exist yet when this runs).
         """
         account = self._load_account()
-        client = self._build_client(account)
-        try:
-            client.get("/me", params={"$select": "userPrincipalName"})
-        except (AuthenticationError, GraphClientError) as exc:
-            raise UserException(str(exc)) from exc
+        with self._sync_action_client(account) as client:
+            try:
+                client.get("/me", params={"$select": "userPrincipalName"})
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
 
     @sync_action("listLibraries")
     def list_libraries(self) -> list[SelectElement]:
@@ -359,16 +197,16 @@ class Component(ComponentBase):
         """
         account = self._load_account()
         self._require_sharepoint_site(account)
-        client = self._build_client(account)
-        try:
-            site_id = get_site_id(client, account.site_url)
-            drives = list_drives(client, site_id)
-        except (AuthenticationError, GraphClientError) as exc:
-            raise UserException(str(exc)) from exc
+        with self._sync_action_client(account) as client:
+            try:
+                site_id = get_site_id(client, account.site_url)
+                drives = list_drives(client, site_id)
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
         return [SelectElement(label=drive["name"], value=drive["id"]) for drive in drives]
 
     @sync_action("search")
-    def search(self) -> dict:
+    def search(self) -> dict[str, Any]:
         """v1-parity ``search`` sync action (design spec §5): find a workbook by ``workbook.path``.
 
         Unlike the other three v1-parity actions, ``search`` only ever accepts a ``path`` (v1's
@@ -378,12 +216,12 @@ class Component(ComponentBase):
         treats those as "not found".
         """
         account = self._load_account()
-        client = self._build_client(account)
         path = self._require_workbook_path('To search for a workbook please configure "parameters.workbook.path".')
-        try:
-            result = search_workbook(client, account, path)
-        except (AuthenticationError, GraphClientError) as exc:
-            raise UserException(str(exc)) from exc
+        with self._sync_action_client(account) as client:
+            try:
+                result = search_workbook(client, account, path)
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
         if result is None:
             return {"file": None}
         return {
@@ -396,7 +234,7 @@ class Component(ComponentBase):
         }
 
     @sync_action("getWorksheets")
-    def get_worksheets(self) -> dict:
+    def get_worksheets(self) -> dict[str, Any]:
         """v1-parity ``getWorksheets`` sync action (design spec §5): list a workbook's sheets.
 
         ``workbook`` accepts either targeting form (ids or path, design spec §5's ``Workbook``
@@ -407,17 +245,17 @@ class Component(ComponentBase):
         Task 8 report for detail).
         """
         account = self._load_account()
-        client = self._build_client(account)
         workbook = self._load_workbook_param()
-        try:
-            drive_id, file_id, _created = resolve_workbook(client, account, workbook, create_if_missing=False)
-            worksheets = list_worksheets_with_headers(client, drive_id, file_id)
-        except (AuthenticationError, GraphClientError) as exc:
-            raise UserException(str(exc)) from exc
+        with self._sync_action_client(account) as client:
+            try:
+                drive_id, file_id, _created = resolve_workbook(client, account, workbook, create_if_missing=False)
+                worksheets = list_worksheets_with_headers(client, drive_id, file_id)
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
         return {"worksheets": worksheets}
 
     @sync_action("createWorkbook")
-    def create_workbook(self) -> dict:
+    def create_workbook(self) -> dict[str, Any]:
         """v1-parity ``createWorkbook`` sync action (design spec §5): create an empty workbook.
 
         Only ``workbook.path`` is accepted (v1 parity — there is no "create by ids" concept).
@@ -426,18 +264,18 @@ class Component(ComponentBase):
         which is exactly the check v1's ``SheetProvider::createFile`` performs too.
         """
         account = self._load_account()
-        client = self._build_client(account)
         path = self._require_workbook_path('To create workbook please configure "parameters.workbook.path".')
-        try:
-            drive_id, file_id, created = resolve_workbook(client, account, Workbook(path=path))
-        except (AuthenticationError, GraphClientError) as exc:
-            raise UserException(str(exc)) from exc
+        with self._sync_action_client(account) as client:
+            try:
+                drive_id, file_id, created = resolve_workbook(client, account, Workbook(path=path))
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
         if not created:
             raise UserException(f'Workbook "{path}" already exists.')
         return {"file": {"driveId": drive_id, "fileId": file_id}}
 
     @sync_action("createWorksheet")
-    def create_worksheet(self) -> dict:
+    def create_worksheet(self) -> dict[str, Any]:
         """v1-parity ``createWorksheet`` sync action (design spec §5): add a named worksheet.
 
         ``workbook`` accepts either targeting form (ids or path); the workbook itself is never
@@ -448,14 +286,18 @@ class Component(ComponentBase):
         ``SheetProvider::createSheet``.
         """
         account = self._load_account()
-        client = self._build_client(account)
         workbook = self._load_workbook_param()
         worksheet = self._require_worksheet_name('To create worksheet please configure "parameters.worksheet.name".')
-        try:
-            drive_id, file_id, _workbook_created = resolve_workbook(client, account, workbook, create_if_missing=False)
-            worksheet_id, created, _actual_name = resolve_worksheet(client, drive_id, file_id, worksheet, session=None)
-        except (AuthenticationError, GraphClientError) as exc:
-            raise UserException(str(exc)) from exc
+        with self._sync_action_client(account) as client:
+            try:
+                drive_id, file_id, _workbook_created = resolve_workbook(
+                    client, account, workbook, create_if_missing=False
+                )
+                worksheet_id, created, _actual_name = resolve_worksheet(
+                    client, drive_id, file_id, worksheet, session=None
+                )
+            except (AuthenticationError, GraphClientError) as exc:
+                raise UserException(str(exc)) from exc
         if not created:
             raise UserException(f'Worksheet "{worksheet.name}" already exists.')
         return {"worksheet": {"driveId": drive_id, "fileId": file_id, "worksheetId": worksheet_id}}
@@ -516,15 +358,15 @@ class Component(ComponentBase):
         except ValidationError as e:
             raise UserException(f"Invalid configuration: {_format_validation_error(e)}") from e
 
-    def _dispatch_mode(self, config: RowConfig, client: GraphClient, drive_id: str, now: datetime) -> None:
+    def _dispatch_mode(self, config: RowConfig, client: GraphClient, now: datetime) -> None:
         if config.mode == Mode.FILE:
-            self._run_file_mode(config, client, drive_id, now)
+            self._run_file_mode(config, client, now)
         elif config.mode == Mode.TABLE_CSV:
-            self._run_csv_mode(config, client, drive_id, now)
+            self._run_csv_mode(config, client, now)
         else:
-            self._run_excel_mode(config, client, drive_id)
+            self._run_excel_mode(config, client)
 
-    def _run_file_mode(self, config: RowConfig, client: GraphClient, drive_id: str, now: datetime) -> None:
+    def _run_file_mode(self, config: RowConfig, client: GraphClient, now: datetime) -> None:
         """Upload every file from the row's file input mapping (design spec §2/§6)."""
         files: list[FileDefinition] = self.get_input_files_definitions()
         if not files:
@@ -532,6 +374,7 @@ class Component(ComponentBase):
                 "No files found in the input mapping. Add at least one file to this row's file "
                 "input mapping before running mode 'file'."
             )
+        drive_id = resolve_drive_id(client, config.account, config.destination.drive_id)
         parent_id, folder_path = self._resolve_destination_folder(config, client, drive_id, now)
         conflict_behavior = config.destination.conflict_behavior.value
         for file_def in files:
@@ -539,9 +382,10 @@ class Component(ComponentBase):
             target_path = f"{folder_path}/{file_def.name}" if folder_path else file_def.name
             logger.info("Uploaded file '%s' to '%s'.", file_def.name, target_path)
 
-    def _run_csv_mode(self, config: RowConfig, client: GraphClient, drive_id: str, now: datetime) -> None:
+    def _run_csv_mode(self, config: RowConfig, client: GraphClient, now: datetime) -> None:
         """Upload the row's single input table as a CSV file (design spec §2/§6)."""
         table = self._require_single_input_table()
+        drive_id = resolve_drive_id(client, config.account, config.destination.drive_id)
         parent_id, folder_path = self._resolve_destination_folder(config, client, drive_id, now)
         table_base_name = table.name.removesuffix(".csv")
         file_name = config.csv.file_name or f"{table_base_name}.csv"
@@ -555,12 +399,15 @@ class Component(ComponentBase):
         target_path = f"{folder_path}/{file_name}" if folder_path else file_name
         logger.info("Uploaded CSV file '%s' to '%s'.", file_name, target_path)
 
-    def _run_excel_mode(self, config: RowConfig, client: GraphClient, drive_id: str) -> None:
+    def _run_excel_mode(self, config: RowConfig, client: GraphClient) -> None:
         """Write the row's single input table into an Excel worksheet (design spec §5/§6).
 
-        Unlike file/CSV mode, Excel mode never uses the ``drive_id`` the caller resolved from
-        ``destination.drive_id`` (that field doesn't even apply here) — the target drive comes
-        entirely from ``workbook.{path,drive_id,file_id}``, resolved below via
+        Unlike file/CSV mode, Excel mode never resolves a drive id via
+        :func:`~client.drives.resolve_drive_id` at all — ``destination.drive_id`` doesn't even
+        apply here (phase 8 audit IMPORTANT-2: that call used to happen unconditionally in
+        ``run()``, costing every Excel-mode SharePoint run two unused Graph calls that could fail
+        a run whose real target is elsewhere). The target drive comes entirely from
+        ``workbook.{path,drive_id,file_id}``, resolved below via
         :func:`~client.excel_writer.resolve_workbook`.
         """
         if config.account.account_type == AccountType.PRIVATE_ONEDRIVE:
@@ -669,9 +516,6 @@ class Component(ComponentBase):
                 "listLibraries requires a SharePoint account with both account.tenant_id and "
                 "account.site_url configured."
             )
-
-    def _build_client(self, account: Account) -> GraphClient:
-        return GraphClient(token_provider=self._build_token_provider(account))
 
     def _build_token_provider(self, account: Account) -> TokenProvider:
         """Build the `RefreshTokenProvider` for `account`, from OAuth credentials + state.

@@ -74,6 +74,13 @@ def _build_component(tmp_path, parameters: dict, oauth: dict | None = _UNSET, st
         return Component()
 
 
+def _fake_token_provider(rotated_refresh_token: str | None = None) -> MagicMock:
+    """A `TokenProvider` double that never touches the network and reports a fixed rotation."""
+    provider = MagicMock()
+    provider.rotated_refresh_token = rotated_refresh_token
+    return provider
+
+
 def _fake_token_response(access_token="access-1", refresh_token="refresh-rotated-1") -> MagicMock:
     response = MagicMock()
     response.status_code = 200
@@ -387,3 +394,97 @@ class TestCreateWorksheetValidation:
         assert called_worksheet.id is None
         assert called_worksheet.position is None
         assert result == {"worksheet": {"driveId": "drive-1", "fileId": "file-1", "worksheetId": "ws-1"}}
+
+
+# --- IMPORTANT-1/IMPORTANT-5 (phase 8 audit): shared `_sync_action_client` ----------------------
+
+
+class TestSyncActionTokenPersistence:
+    """Every sync action goes through `_sync_action_client`, which must persist a rotated
+    refresh token to row state in `finally` — previously every sync action refreshed a token
+    (Graph always rotates it) and silently discarded the rotation, forcing the next run to
+    present an already-consumed refresh token to Microsoft."""
+
+    def test_test_connection_persists_rotated_refresh_token(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider("rotated-tc-1")),
+        ):
+            comp.test_connection()
+
+        state = json.loads((tmp_path / "data" / "out" / "state.json").read_text())
+        payload = json.loads(state["#refreshed_auth_data"])
+        assert payload["refresh_token"] == "rotated-tc-1"
+
+    def test_search_persists_rotated_refresh_token(self, tmp_path):
+        # A different sync action than test_connection — proves the persistence lives in the
+        # shared helper, not duplicated (and possibly missed) per action.
+        parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {"path": "/book.xlsx"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider("rotated-search-1")),
+            mock.patch("component.search_workbook", return_value=None),
+        ):
+            comp.search()
+
+        state = json.loads((tmp_path / "data" / "out" / "state.json").read_text())
+        payload = json.loads(state["#refreshed_auth_data"])
+        assert payload["refresh_token"] == "rotated-search-1"
+
+    def test_no_state_written_when_nothing_rotated(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider(None)),
+        ):
+            comp.test_connection()
+
+        assert not (tmp_path / "data" / "out" / "state.json").exists()
+
+    def test_token_still_persisted_when_the_sync_action_raises(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+        fake_client.get.side_effect = GraphPermissionError("no access", status_code=403)
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider("rotated-tc-2")),
+            pytest.raises(UserException),
+        ):
+            comp.test_connection()
+
+        state = json.loads((tmp_path / "data" / "out" / "state.json").read_text())
+        payload = json.loads(state["#refreshed_auth_data"])
+        assert payload["refresh_token"] == "rotated-tc-2"
+
+
+class TestSyncActionRetryBudget:
+    """IMPORTANT-5 (phase 8 audit): sync actions block the Keboola UI while they run, so they
+    must use a reduced, fast-fail retry budget instead of `run()`'s full unattended-job defaults
+    — otherwise a rate-limited Graph call could hang the UI for minutes."""
+
+    def test_sync_action_client_uses_reduced_retry_budget(self, tmp_path):
+        parameters = {"account": {"account_type": "private_onedrive"}}
+        comp = _build_component(tmp_path, parameters)
+
+        with (
+            mock.patch("component.GraphClient") as mock_graph_client,
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+        ):
+            comp.test_connection()
+
+        mock_graph_client.assert_called_once()
+        _, kwargs = mock_graph_client.call_args
+        assert kwargs["total_wait_cap_seconds"] == 15
+        assert kwargs["max_retry_attempts"] == 2

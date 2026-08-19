@@ -85,6 +85,23 @@ class TestRunOrchestratorShape:
         source = inspect.getsource(Component.run)
         assert len(source.splitlines()) <= 30
 
+    def test_run_uses_the_default_unattended_job_retry_budget(self, tmp_path):
+        """IMPORTANT-5 (phase 8 audit): unlike a sync action, `run()` is an unattended job — it
+        must keep `GraphClient`'s full default retry budget, not the sync action's fast-fail one."""
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient") as mock_graph_client,
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+        ):
+            comp.run()
+
+        mock_graph_client.assert_called_once_with(token_provider=mock.ANY)
+
 
 class TestFileMode:
     @freeze_time("2026-08-17")
@@ -329,13 +346,15 @@ class TestExcelMode:
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.resolve_drive_id") as mock_resolve_drive_id,
             mock.patch("component.resolve_workbook") as mock_resolve_workbook,
             pytest.raises(UserException, match="private_onedrive"),
         ):
             comp.run()
 
         mock_resolve_workbook.assert_not_called()
+        # IMPORTANT-2 (phase 8 audit): Excel mode never resolves a drive id at all.
+        mock_resolve_drive_id.assert_not_called()
 
     def test_empty_csv_logs_v1_parity_warning_and_exits_cleanly(self, tmp_path, caplog):
         parameters = {
@@ -349,7 +368,7 @@ class TestExcelMode:
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.resolve_drive_id") as mock_resolve_drive_id,
             mock.patch("component.resolve_workbook", return_value=("wb-drive", "wb-file", False)),
             mock.patch("component.workbook_session", return_value=_fake_session_context_manager("session-1")),
             mock.patch("component.resolve_worksheet", return_value=("sheet-1", False, "Sheet1")),
@@ -360,6 +379,7 @@ class TestExcelMode:
 
         mock_write.assert_called_once()
         assert 'Ignored empty CSV file "empty".' in caplog.text
+        mock_resolve_drive_id.assert_not_called()
 
     def test_happy_path_passes_configured_append_and_batch_size_to_write_table(self, tmp_path):
         parameters = {
@@ -375,7 +395,7 @@ class TestExcelMode:
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.resolve_drive_id") as mock_resolve_drive_id,
             mock.patch(
                 "component.resolve_workbook", return_value=("wb-drive", "wb-file", False)
             ) as mock_resolve_workbook,
@@ -389,6 +409,7 @@ class TestExcelMode:
         ):
             comp.run()
 
+        mock_resolve_drive_id.assert_not_called()
         mock_resolve_workbook.assert_called_once()
         assert mock_resolve_workbook.call_args.args[1].account_type.value == "onedrive_for_business"
         mock_session.assert_called_once_with(mock.ANY, "wb-drive", "wb-file")
