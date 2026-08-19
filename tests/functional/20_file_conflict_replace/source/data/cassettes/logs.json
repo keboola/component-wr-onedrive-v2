@@ -6,19 +6,19 @@
       "level": "WARNING",
       "logger": "root",
       "message": "No action defined in the configuration, using the default run action.",
-      "timestamp": "2026-08-19T08:15:10.000Z"
+      "timestamp": "2026-08-19T10:39:58.000Z"
     },
     {
       "level": "INFO",
       "logger": "root",
       "message": "Loading state file..",
-      "timestamp": "2026-08-19T08:15:10.000Z"
+      "timestamp": "2026-08-19T10:39:58.000Z"
     },
     {
       "level": "INFO",
       "logger": "__main__",
-      "message": "Uploaded file 'vcr_test_file.txt' to 'keboola-vcr-tests/20260819081510/files/vcr_test_file.txt'.",
-      "timestamp": "2026-08-19T08:15:10.000Z"
+      "message": "Uploaded file 'vcr_test_file.txt' to 'keboola-vcr-tests/20260819103958/files/vcr_test_file.txt'.",
+      "timestamp": "2026-08-19T10:39:58.000Z"
     }
   ]
 }

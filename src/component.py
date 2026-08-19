@@ -589,9 +589,13 @@ if __name__ == "__main__":
         comp = Component()
         # this triggers the run method by default and is controlled by the configuration.action parameter
         comp.execute_action()
-    except UserException:
-        logger.exception("Component failed with a user error")
+    except UserException as exc:
+        # A user-fixable error — the message itself must reach the job UI (it becomes the
+        # GELF short_message); a traceback would only add noise to the job log.
+        logger.error(str(exc))
         sys.exit(1)
     except Exception:
+        # Application error (exit 2) — the platform hides the message from the user;
+        # the traceback in the internal log is what matters here.
         logger.exception("Component failed with an unexpected error")
         sys.exit(2)

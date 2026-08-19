@@ -7,7 +7,7 @@
       "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
     },
     "destination": {
-      "folder_path": "keboola-vcr-tests/20260819081510/files",
+      "folder_path": "keboola-vcr-tests/20260819103958/files",
       "conflict_behavior": "replace"
     }
   },
