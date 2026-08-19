@@ -4,8 +4,8 @@
       "files": [],
       "tables": [
         {
-          "source": "in.c-example.example",
-          "destination": "example.csv"
+          "source": "in.c-example.customers",
+          "destination": "customers.csv"
         }
       ]
     },
@@ -15,7 +15,31 @@
     }
   },
   "parameters": {
-    "#api_token": "your-secret-token",
-    "debug": false
+    "account": {
+      "account_type": "sharepoint",
+      "tenant_id": "00000000-0000-0000-0000-000000000000",
+      "site_url": "https://contoso.sharepoint.com/sites/DataTeam"
+    },
+    "mode": "table_csv",
+    "destination": {
+      "drive_id": "",
+      "folder_path": "reports/{date:%Y-%m-%d}",
+      "conflict_behavior": "replace"
+    },
+    "csv": {
+      "file_name": "customers.csv",
+      "delimiter": ",",
+      "enclosure": "\"",
+      "include_header": true
+    }
+  },
+  "authorization": {
+    "oauth_api": {
+      "credentials": {
+        "appKey": "sample-client-id",
+        "#appSecret": "sample-secret",
+        "#data": "{\"refresh_token\": \"sample-refresh-token\"}"
+      }
+    }
   }
 }
