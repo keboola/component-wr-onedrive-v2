@@ -8,12 +8,20 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from keboola.component.base import _SYNC_ACTION_MAPPING
 
 import component  # noqa: F401 - importing populates `_SYNC_ACTION_MAPPING` (decorators run on import)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPONENT_CONFIG_DIR = REPO_ROOT / "component_config"
+
+# The Docker test image copies only src/ and tests/ (canonical template), so the schema files are
+# absent there — this cross-check then runs only in local/CI-repo contexts where they exist.
+pytestmark = pytest.mark.skipif(
+    not COMPONENT_CONFIG_DIR.exists(),
+    reason="component_config/ not present in this environment (Docker test image)",
+)
 
 
 def _iter_async_actions(node: Any) -> list[str]:
