@@ -26,7 +26,21 @@ from client.exceptions import (
     MultipleSitesFoundError,
     WorksheetNotFoundError,
 )
+from client.graph_client import GraphClient
 from configuration import Account, AccountType, Workbook, Worksheet
+
+
+def _mock_graph_client() -> MagicMock:
+    """A `MagicMock` `GraphClient` double with a *real* ``get_paged`` bound on top.
+
+    ``get_paged`` only ever calls ``self.get(...)`` (see ``client.graph_client``) — binding the
+    genuine implementation lets these tests keep faking just ``.get()`` even now that
+    ``_list_worksheets`` delegates to ``get_paged`` instead of hand-rolling its own pagination
+    loop (phase 8 audit).
+    """
+    client = MagicMock()
+    client.get_paged = GraphClient.get_paged.__get__(client)
+    return client
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -410,7 +424,7 @@ def _worksheets_response(items):
 
 class TestResolveWorksheet:
     def test_resolve_by_id_success(self):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response([{"id": "id-1", "name": "Sheet1", "position": 0}])
         worksheet = Worksheet(id="id-1")
 
@@ -420,7 +434,7 @@ class TestResolveWorksheet:
         assert client.get.call_args.kwargs["headers"] == {}
 
     def test_resolve_by_id_not_found_raises(self):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response([{"id": "other", "name": "Sheet1", "position": 0}])
         worksheet = Worksheet(id="missing")
 
@@ -428,7 +442,7 @@ class TestResolveWorksheet:
             resolve_worksheet(client, "drive-1", "file-1", worksheet, None)
 
     def test_resolve_by_position_including_hidden(self):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response(
             [
                 {"id": "id-1", "name": "Visible", "position": 0, "visibility": "Visible"},
@@ -442,7 +456,7 @@ class TestResolveWorksheet:
         assert (worksheet_id, actual_name) == ("id-2", "Hidden")
 
     def test_resolve_by_position_not_found_raises(self):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response([{"id": "id-1", "name": "Sheet1", "position": 0}])
         worksheet = Worksheet(position=5)
 
@@ -450,7 +464,7 @@ class TestResolveWorksheet:
             resolve_worksheet(client, "drive-1", "file-1", worksheet, None)
 
     def test_resolve_by_name_found(self):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response([{"id": "id-1", "name": "Data", "position": 0}])
         worksheet = Worksheet(name="Data")
 
@@ -460,7 +474,7 @@ class TestResolveWorksheet:
         assert client.get.call_args.kwargs["headers"] == {"workbook-session-id": "sess-1"}
 
     def test_resolve_by_name_missing_creates_sheet(self, caplog):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response([])
         client.post.return_value = _response(json_body={"id": "new-id", "name": "Data"})
         worksheet = Worksheet(name="Data")
@@ -478,7 +492,7 @@ class TestResolveWorksheet:
         assert 'New sheet "Data" created.' in caplog.text
 
     def test_rename_when_resolved_by_id_and_name_differs(self):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response([{"id": "{abc-123}", "name": "Sheet1", "position": 0}])
         worksheet = Worksheet(id="{abc-123}", name="Renamed")
 
@@ -493,7 +507,7 @@ class TestResolveWorksheet:
         )
 
     def test_no_rename_when_name_matches_resolved_name(self):
-        client = MagicMock()
+        client = _mock_graph_client()
         client.get.return_value = _worksheets_response([{"id": "id-1", "name": "Sheet1", "position": 0}])
         worksheet = Worksheet(id="id-1", name="Sheet1")
 

@@ -36,6 +36,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import resources
+from typing import Any
 from urllib.parse import quote, unquote
 
 from client.exceptions import (
@@ -247,7 +248,7 @@ def _parse_workbook_path(client: GraphClient, path: str) -> tuple[str, str, list
     raise InvalidWorkbookPathError(f'Unexpected path format for workbook.path: "{path}".')
 
 
-def _fetch_sharing_link_item(client: GraphClient, link: str) -> dict:
+def _fetch_sharing_link_item(client: GraphClient, link: str) -> dict[str, Any]:
     """Resolve an ``https://`` sharing link to its driveItem (id, name, parentReference, ...).
 
     v1 parity: truncates the link to 32 characters (with a trailing ``"..."`` regardless of
@@ -311,7 +312,7 @@ def _get_or_create_workbook_item(
     return drive_id, item["id"], False
 
 
-def _create_empty_workbook(client: GraphClient, drive_id: str, relative_path: str, business: bool) -> dict:
+def _create_empty_workbook(client: GraphClient, drive_id: str, relative_path: str, business: bool) -> dict[str, Any]:
     folder_path, file_name = _split_folder_and_name(relative_path)
     if folder_path:
         validate_path(folder_path, business)
@@ -328,7 +329,7 @@ def _split_folder_and_name(relative_path: str) -> tuple[str, str]:
     return (folder if separator else ""), name
 
 
-def _check_xlsx_mime(item: dict) -> None:
+def _check_xlsx_mime(item: dict[str, Any]) -> None:
     mime_type = (item.get("file") or {}).get("mimeType")
     if mime_type != XLSX_MIME_TYPE:
         raise InvalidWorkbookFormatError(f'File is not in the "XLSX" Excel format. Mime type: "{mime_type}"')
@@ -381,7 +382,7 @@ def search_workbook(client: GraphClient, account: Account, path: str) -> Workboo
     )
 
 
-def _format_path_segments(item: dict, prefix: list[str]) -> str | None:
+def _format_path_segments(item: dict[str, Any], prefix: list[str]) -> str | None:
     """v1's ``File::from``/``jsonSerialize`` "path" breadcrumb: ``prefix`` + parent folder segments.
 
     ``item["parentReference"]["path"]`` is Graph's ``"/drives/{id}/root:/folder/sub"``-style
@@ -494,21 +495,19 @@ def _worksheet_base_url(drive_id: str, file_id: str, worksheet_id: str) -> str:
     return f"/drives/{drive_id}/items/{file_id}/workbook/worksheets/{encoded_id}"
 
 
-def _list_worksheets(client: GraphClient, drive_id: str, file_id: str, headers: dict) -> list[dict]:
-    """Page through every worksheet in the workbook (``@odata.nextLink``, workbook-transient retries)."""
-    worksheets: list[dict] = []
-    next_url: str | None = f"/drives/{drive_id}/items/{file_id}/workbook/worksheets"
-    next_params: dict | None = {"$select": WORKSHEET_LIST_SELECT}
-    absolute = False
-    while next_url:
-        body = client.get(
-            next_url, params=next_params, headers=headers, absolute=absolute, retry_transient_workbook=True
-        ).json()
-        worksheets.extend(body.get("value", []))
-        next_url = body.get("@odata.nextLink")
-        next_params = None
-        absolute = True
-    return worksheets
+def _list_worksheets(client: GraphClient, drive_id: str, file_id: str, headers: dict[str, Any]) -> list[dict[str, Any]]:
+    """Page through every worksheet in the workbook (``@odata.nextLink``, workbook-transient retries).
+
+    Delegates to :meth:`GraphClient.get_paged` (its ``**request_kwargs`` passthrough is what makes
+    ``retry_transient_workbook=True`` possible here) instead of hand-rolling the same pagination
+    loop again (phase 8 audit).
+    """
+    url = f"/drives/{drive_id}/items/{file_id}/workbook/worksheets"
+    return list(
+        client.get_paged(
+            url, params={"$select": WORKSHEET_LIST_SELECT}, headers=headers, retry_transient_workbook=True
+        )
+    )
 
 
 def resolve_worksheet(
@@ -555,11 +554,11 @@ def resolve_worksheet(
     return worksheet_id, is_new, actual_name
 
 
-def _find_worksheet(worksheets: list[dict], predicate) -> dict | None:
+def _find_worksheet(worksheets: list[dict[str, Any]], predicate) -> dict[str, Any] | None:
     return next((item for item in worksheets if predicate(item)), None)
 
 
-def _create_worksheet(client: GraphClient, drive_id: str, file_id: str, name: str, headers: dict) -> dict:
+def _create_worksheet(client: GraphClient, drive_id: str, file_id: str, name: str, headers: dict[str, Any]) -> dict[str, Any]:
     url = f"/drives/{drive_id}/items/{file_id}/workbook/worksheets/add"
     response = client.post(url, json={"name": name}, headers=headers, retry_transient_workbook=True)
     logger.info('New sheet "%s" created.', name)
@@ -567,13 +566,15 @@ def _create_worksheet(client: GraphClient, drive_id: str, file_id: str, name: st
 
 
 def _rename_worksheet(
-    client: GraphClient, drive_id: str, file_id: str, worksheet_id: str, new_name: str, headers: dict
+    client: GraphClient, drive_id: str, file_id: str, worksheet_id: str, new_name: str, headers: dict[str, Any]
 ) -> None:
     url = _worksheet_base_url(drive_id, file_id, worksheet_id)
     client.patch(url, json={"name": new_name}, headers=headers, retry_transient_workbook=True)
 
 
-def _read_header_row(client: GraphClient, drive_id: str, file_id: str, worksheet_id: str, headers: dict) -> list[str]:
+def _read_header_row(
+    client: GraphClient, drive_id: str, file_id: str, worksheet_id: str, headers: dict[str, Any]
+) -> list[str]:
     """Read a worksheet's first-row cell values (as strings), via ``usedRange``'s row 0.
 
     Shared by :func:`_prepare_append` (decides whether an append target already has a header)
@@ -596,7 +597,7 @@ def _read_header_row(client: GraphClient, drive_id: str, file_id: str, worksheet
     return [str(cell) for cell in text_rows[0]] if text_rows else []
 
 
-def list_worksheets_with_headers(client: GraphClient, drive_id: str, file_id: str) -> list[dict]:
+def list_worksheets_with_headers(client: GraphClient, drive_id: str, file_id: str) -> list[dict[str, Any]]:
     """List every worksheet in a workbook with its normalized header (``getWorksheets``, §5).
 
     Sessionless (sync actions never open a workbook session — v1 doesn't either) and
@@ -606,7 +607,7 @@ def list_worksheets_with_headers(client: GraphClient, drive_id: str, file_id: st
     worksheets = _list_worksheets(client, drive_id, file_id, headers={})
     worksheets.sort(key=lambda item: item["position"])
 
-    result: list[dict] = []
+    result: list[dict[str, Any]] = []
     for item in worksheets:
         header_cells = _read_header_row(client, drive_id, file_id, item["id"], headers={})
         visible = str(item.get("visibility", "")).lower() == "visible"
@@ -701,7 +702,7 @@ def write_table(
 
 
 def _prepare_overwrite(
-    client: GraphClient, drive_id: str, file_id: str, worksheet_id: str, is_new_sheet: bool, headers: dict
+    client: GraphClient, drive_id: str, file_id: str, worksheet_id: str, is_new_sheet: bool, headers: dict[str, Any]
 ) -> tuple[int, int, bool]:
     if not is_new_sheet:
         url = f"{_worksheet_base_url(drive_id, file_id, worksheet_id)}/range/clear"
@@ -716,7 +717,7 @@ def _prepare_append(
     worksheet_id: str,
     is_new_sheet: bool,
     csv_header: list[str],
-    headers: dict,
+    headers: dict[str, Any],
 ) -> tuple[int, int, bool]:
     if is_new_sheet:
         logger.info("Sheet is empty.")

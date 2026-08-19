@@ -35,6 +35,7 @@ from keboola.component.exceptions import UserException
 
 from client.excel_writer import XLSX_MIME_TYPE
 from client.exceptions import GraphBadRequestError, GraphNotFoundError
+from client.graph_client import GraphClient
 from component import Component
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "v1_parity"
@@ -86,11 +87,18 @@ def _route(rules, method: str, url: str):
 
 
 def _fake_client(get_rules=(), post_rules=(), put_rules=()) -> MagicMock:
-    """A `GraphClient` double routing on URL only (params/headers are ignored — irrelevant here)."""
+    """A `GraphClient` double routing on URL only (params/headers are ignored — irrelevant here).
+
+    ``get_paged`` is the genuine ``GraphClient`` implementation bound onto this double (it only
+    ever calls ``self.get(...)``, see ``client.graph_client``) — this lets URL-only routing via
+    ``.get`` alone still work for callers that go through ``get_paged`` (e.g.
+    ``client.excel_writer._list_worksheets``, phase 8 audit).
+    """
     client = MagicMock()
     client.get.side_effect = lambda url, *a, **kw: _route(get_rules, "GET", url)
     client.post.side_effect = lambda url, *a, **kw: _route(post_rules, "POST", url)
     client.put.side_effect = lambda url, *a, **kw: _route(put_rules, "PUT", url)
+    client.get_paged = GraphClient.get_paged.__get__(client)
     return client
 
 

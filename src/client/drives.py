@@ -13,6 +13,7 @@ path — a drive's ``id`` is the canonical, stable identifier Graph uses everywh
 uniformly through it, regardless of account type.
 """
 
+from typing import Any
 from urllib.parse import urlparse
 
 from client.exceptions import GraphNotFoundError
@@ -51,7 +52,7 @@ def get_site_id(client: GraphClient, site_url: str) -> str:
     return response.json()["id"]
 
 
-def list_drives(client: GraphClient, site_id: str) -> list[dict]:
+def list_drives(client: GraphClient, site_id: str) -> list[dict[str, Any]]:
     """List every document library (drive) on a site.
 
     Each item has (at least) ``id``, ``name``, and ``webUrl`` — paginated via

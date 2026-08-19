@@ -25,6 +25,7 @@ import logging
 import time
 from collections.abc import Callable, Iterator
 from importlib import metadata as importlib_metadata
+from typing import Any
 
 import requests
 
@@ -163,9 +164,9 @@ class GraphClient:
         method: str,
         url: str,
         *,
-        json: dict | list | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        json: dict[str, Any] | list[Any] | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
         data=None,
         absolute: bool = False,
         auth: bool = True,
@@ -327,17 +328,26 @@ class GraphClient:
         self,
         url: str,
         *,
-        params: dict | None = None,
-        headers: dict | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
         absolute: bool = False,
-    ) -> Iterator[dict]:
-        """Yield every item from the ``value`` array across all ``@odata.nextLink`` pages."""
+        **request_kwargs: Any,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every item from the ``value`` array across all ``@odata.nextLink`` pages.
+
+        ``**request_kwargs`` passes through to every underlying :meth:`get` call (e.g.
+        ``retry_transient_workbook=True``), so callers that need a non-default request option
+        don't have to hand-roll their own pagination loop just to get it — see
+        ``client.excel_writer._list_worksheets`` (phase 8 audit).
+        """
         next_url: str | None = url
         next_params = params
         next_absolute = absolute
 
         while next_url:
-            response = self.get(next_url, params=next_params, headers=headers, absolute=next_absolute)
+            response = self.get(
+                next_url, params=next_params, headers=headers, absolute=next_absolute, **request_kwargs
+            )
             body = response.json()
             yield from body.get("value", [])
             next_url = body.get("@odata.nextLink")
@@ -348,7 +358,7 @@ class GraphClient:
     def _join_url(self, url: str) -> str:
         return f"{self._base_url}/{url.lstrip('/')}"
 
-    def _build_headers(self, caller_headers: dict | None, *, auth: bool) -> dict:
+    def _build_headers(self, caller_headers: dict[str, Any] | None, *, auth: bool) -> dict[str, Any]:
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
         if auth:
             headers["Authorization"] = f"Bearer {self._token_provider.get_access_token()}"
