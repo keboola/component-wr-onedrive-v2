@@ -70,16 +70,22 @@
           "title": "Folder Path",
           "description": "Folder inside the library; missing folders are created automatically",
           "options": {
-            "tooltip": "Relative to the library root. Supports strftime-style date placeholders, e.g. reports/{date:%Y-%m-%d} — resolved at run start (UTC) by default, or use the Date field below (e.g. set Date to 'yesterday') to write into a different day's folder."
+            "tooltip": "Relative to the library root. Supports the {{date}} placeholder, e.g. acme/reports/{{date}}/ — resolved at run start (UTC) by default, or use the Date field below (e.g. set Date to 'yesterday') to write into a different day's folder.",
+            "inputAttributes": {
+              "placeholder": "acme/reports/{{date}}/"
+            }
           },
           "propertyOrder": 2
         },
         "date": {
           "type": "string",
           "title": "Date",
-          "description": "Date used by the {date:...} placeholders in Folder Path",
+          "description": "Date used by the {{date}} placeholder in Folder Path",
           "options": {
-            "tooltip": "Accepts a relative expression (yesterday, 3 days ago, last week) or an absolute date (2026-01-31). Leave empty to default to the job's start date (UTC)."
+            "tooltip": "Accepts a relative expression (yesterday, 3 days ago, last week) or an absolute date (2026-01-31). Leave empty to default to the job's start date (UTC).",
+            "inputAttributes": {
+              "placeholder": "yesterday"
+            }
           },
           "propertyOrder": 3
         },
@@ -120,7 +126,10 @@
           "title": "File Name",
           "description": "Name of the uploaded CSV file",
           "options": {
-            "tooltip": "Only applies when exactly one table is mapped to this row. Defaults to the table's name with a .csv extension when left empty; leave empty when more than one table is mapped (each is then uploaded as '<table name>.csv')."
+            "tooltip": "Only applies when exactly one table is mapped to this row. Defaults to the table's name with a .csv extension when left empty; leave empty when more than one table is mapped (each is then uploaded as '<table name>.csv'). Supports the {{date}} placeholder, resolved the same way as Folder Path's.",
+            "inputAttributes": {
+              "placeholder": "orders.csv"
+            }
           },
           "propertyOrder": 1
         },
@@ -182,6 +191,9 @@
           "description": "Path to the target workbook; created automatically when missing",
           "options": {
             "tooltip": "Accepts a library-relative path (/Reports/data.xlsx), drive://{driveId}/path, site://{siteName}/path, or an https:// sharing link. Use the search sync action to check whether it already exists.",
+            "inputAttributes": {
+              "placeholder": "site://Site Name/folder/workbook.xlsx"
+            },
             "dependencies": {
               "targeting": "path"
             }
@@ -298,6 +310,9 @@
           "description": "Name of the target worksheet; created if it doesn't exist",
           "options": {
             "tooltip": "Selects the worksheet by name, creating it if it doesn't exist yet.",
+            "inputAttributes": {
+              "placeholder": "Sheet1"
+            },
             "dependencies": {
               "selection": "name"
             }
@@ -317,18 +332,46 @@
         }
       }
     },
-    "append": {
-      "type": "boolean",
-      "format": "checkbox",
-      "title": "Append",
-      "description": "Append rows below existing data instead of clearing and overwriting the worksheet",
-      "default": false,
+    "write_mode": {
+      "type": "string",
+      "title": "Write Mode",
+      "description": "How the row's data is written into the worksheet",
+      "enum": [
+        "overwrite",
+        "append",
+        "upsert"
+      ],
       "options": {
+        "enum_titles": [
+          "Full Load",
+          "Append",
+          "Upsert (Incremental)"
+        ],
+        "tooltip": "Full Load clears the worksheet and rewrites it from cell A1. Append writes new rows below the existing data. Upsert matches rows by Key Columns below and updates them in place, appending any row whose key doesn't already exist.",
         "dependencies": {
           "mode": "worksheet"
         }
       },
+      "default": "overwrite",
       "propertyOrder": 50
+    },
+    "key_columns": {
+      "type": "array",
+      "title": "Key Columns",
+      "description": "Column names that identify a row for Upsert write mode",
+      "items": {
+        "type": "string"
+      },
+      "options": {
+        "tooltip": "Column names from the input table's header, e.g. id. Required when Write Mode is set to Upsert (Incremental).",
+        "inputAttributes": {
+          "placeholder": "id"
+        },
+        "dependencies": {
+          "write_mode": "upsert"
+        }
+      },
+      "propertyOrder": 51
     },
     "batch_size": {
       "type": "integer",
@@ -341,7 +384,7 @@
           "mode": "worksheet"
         }
       },
-      "propertyOrder": 51
+      "propertyOrder": 52
     }
   }
 }

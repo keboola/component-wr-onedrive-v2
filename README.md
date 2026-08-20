@@ -80,18 +80,18 @@ Destination (mode `file`)
   Business have a single default drive), but any already-configured value is still honored
   verbatim for every account type.
 - **Folder Path** (`destination.folder_path`) — path inside the library, relative to the library
-  root. Missing folders are created automatically. Supports `strftime`-style date placeholders,
-  for example:
+  root. Missing folders are created automatically. Supports the `{{date}}` placeholder, for
+  example:
 
   ```
-  reports/{date:%Y-%m-%d}
+  acme/reports/{{date}}/
   ```
 
-  Resolved against the job's start time (UTC) by default, or against **Date** (`destination.date`,
-  below) when set.
-- **Date** (`destination.date`) — the date used to resolve `folder_path`'s `{date:...}`
-  placeholders, parsed via [`dateparser`](https://github.com/scrapinghub/dateparser). Accepts a
-  relative expression (`yesterday`, `3 days ago`, `last week`) or an absolute date
+  `{{date}}` resolves to the job's start time (UTC) by default, or to **Date**
+  (`destination.date`, below) when set, formatted `YYYY-MM-DD`.
+- **Date** (`destination.date`) — the date used to resolve `folder_path`'s (and `csv.file_name`'s)
+  `{{date}}` placeholder, parsed via [`dateparser`](https://github.com/scrapinghub/dateparser).
+  Accepts a relative expression (`yesterday`, `3 days ago`, `last week`) or an absolute date
   (`2026-01-31`). Leave empty to default to the job's start date (UTC).
 - **Conflict Behavior** (`destination.conflict_behavior`) — what happens when a file with the same
   name already exists at the destination: `fail` (default — stop with an error), `replace`
@@ -106,7 +106,8 @@ as-is, byte-for-byte.
 - **File Name** (`csv.file_name`) — name of the uploaded CSV file. Only applies when exactly one
   table is mapped to the row (mapping more than one table while also setting `csv.file_name` is a
   configuration error). Defaults to the table's name with a `.csv` extension when left empty; with
-  more than one table mapped, each is uploaded as `<table name>.csv`.
+  more than one table mapped, each is uploaded as `<table name>.csv`. Supports the `{{date}}`
+  placeholder (resolved the same way as `destination.folder_path`'s).
 - **Delimiter** (`csv.delimiter`) — field delimiter character, default `,`.
 - **Enclosure** (`csv.enclosure`) — field enclosure (quote) character, default `"`.
 - **Include Header** (`csv.include_header`) — whether to include the column header row, default
@@ -141,12 +142,24 @@ sitting in the row's configuration from before switching `workbook.targeting`) i
 
 As with workbook targeting, only the selected form's field is used.
 
-- **Append** (`append`) — when `false` (default), the worksheet is cleared and rewritten from cell
-  A1 (overwrite). When `true`, rows are appended below the existing used range; if the sheet
-  already has a header, the CSV's own header row is skipped on append (a column-count mismatch
-  between the new data and the existing header produces a warning, not a failure).
+- **Write Mode** (`write_mode`) — how the row's data is written into the worksheet:
+  - **Full Load** (`overwrite`, default) — the worksheet is cleared and rewritten from cell A1.
+  - **Append** (`append`) — rows are appended below the existing used range; if the sheet already
+    has a header, the CSV's own header row is skipped on append (a column-count mismatch between
+    the new data and the existing header produces a warning, not a failure).
+  - **Upsert (Incremental)** (`upsert`) — existing rows are matched to CSV rows by **Key Columns**
+    (`key_columns`, below); a match whose values differ is updated in place, a CSV row with no
+    match is appended, and an unchanged match is left untouched. A brand-new or genuinely empty
+    worksheet behaves like Full Load. Requires the existing used range to be at most 500,000
+    cells — a larger sheet should use Full Load or Append instead.
+- **Key Columns** (`key_columns`) — column name(s) from the input table's header that identify a
+  row, e.g. `id`. Required (non-empty) when **Write Mode** is Upsert; unused otherwise.
 - **Batch Size** (`batch_size`) — number of rows written per Excel API request, default `5000`.
   Lower it if you hit throttling on very wide tables.
+
+> **Note on older configurations:** the pre-2026-08 `append: true`/`false` boolean is still
+> accepted (silently normalized to `write_mode: append`/`overwrite`) — nothing needs to be
+> re-saved.
 
 Sync Actions
 ============

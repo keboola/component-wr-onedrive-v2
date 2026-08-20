@@ -38,6 +38,9 @@
           "description": "Azure AD tenant ID that owns the account",
           "options": {
             "tooltip": "Find it in the Azure Portal under Azure Active Directory → Overview → Tenant ID. Required for OneDrive for Business and SharePoint accounts.",
+            "inputAttributes": {
+              "placeholder": "00000000-0000-0000-0000-000000000000"
+            },
             "dependencies": {
               "account_type": [
                 "onedrive_for_business",
@@ -53,6 +56,9 @@
           "description": "Full URL of the SharePoint site to connect to",
           "options": {
             "tooltip": "Example: https://contoso.sharepoint.com/sites/DataTeam. Copy it from the address bar while browsing the site.",
+            "inputAttributes": {
+              "placeholder": "https://contoso.sharepoint.com/sites/DataTeam"
+            },
             "dependencies": {
               "account_type": "sharepoint"
             }
