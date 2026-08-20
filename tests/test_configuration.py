@@ -531,3 +531,32 @@ class TestWorksheetSelection:
         assert worksheet.selection is None
         assert worksheet.id == "sheet-1"
         assert worksheet.name == "Renamed"
+
+
+class TestOffModeSectionsDropped:
+    """File-mode rows must ignore stray hidden-section defaults the UI saves (seen live)."""
+
+    def test_file_mode_ignores_stray_workbook_and_worksheet_defaults(self):
+        config = RowConfig.model_validate(
+            {
+                "mode": "file",
+                "account": {"account_type": "private_onedrive"},
+                "workbook": {"targeting": "pick"},
+                "worksheet": {"selection": "pick"},
+            }
+        )
+        assert config.workbook is None
+        assert config.worksheet is None
+
+    def test_worksheet_mode_still_validates_workbook_strictly(self):
+        import pytest
+
+        with pytest.raises(Exception, match="drive_id"):
+            RowConfig.model_validate(
+                {
+                    "mode": "worksheet",
+                    "account": {"account_type": "sharepoint", "tenant_id": "t", "site_url": "https://x"},
+                    "workbook": {"targeting": "pick"},
+                    "worksheet": {"selection": "name", "name": "S"},
+                }
+            )

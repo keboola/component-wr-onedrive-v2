@@ -341,6 +341,22 @@ class RowConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
+    def _drop_off_mode_sections(cls, data: Any) -> Any:
+        """Drop the ``workbook``/``worksheet`` sections entirely when the row is in file mode.
+
+        The UI form saves *hidden* sections' default values into the row (e.g. a file-mode row
+        acquires ``workbook: {"targeting": "pick"}`` with no ids just from being opened and
+        saved), and those stray defaults must never fail validation for a mode that ignores
+        them. Observed live on the platform — not a hypothetical.
+        """
+        if isinstance(data, dict):
+            mode = data.get("mode")
+            if mode in ("file", "table_csv"):
+                data = {k: v for k, v in data.items() if k not in ("workbook", "worksheet")}
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
     def _normalize_mode_alias(cls, data: Any) -> Any:
         """Silently map a pre-merge ``mode`` value (``table_csv``/``table_excel``) to its current
         equivalent (:data:`_LEGACY_MODE_ALIASES`) before ``Mode`` itself ever sees it.
