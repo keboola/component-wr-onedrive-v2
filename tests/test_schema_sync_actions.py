@@ -79,8 +79,8 @@ class TestRowSchemaJsonValidity:
     def test_mode_description_reads_as_a_how_not_a_what(self):
         mode = self._row_schema()["properties"]["mode"]
         assert mode["description"] == (
-            "How this row writes data to OneDrive/SharePoint — upload files as-is, write a table "
-            "as CSV, or write a table into an Excel worksheet."
+            "How this row writes data — File uploads mapped files as-is and writes mapped tables "
+            "as CSV files; Worksheet writes one mapped table into an Excel worksheet."
         )
 
     def test_destination_date_field_is_present_between_folder_path_and_conflict_behavior(self):
@@ -90,6 +90,110 @@ class TestRowSchemaJsonValidity:
         assert date_field["title"] == "Date"
         assert date_field["propertyOrder"] > destination_properties["folder_path"]["propertyOrder"]
         assert date_field["propertyOrder"] < destination_properties["conflict_behavior"]["propertyOrder"]
+
+
+class TestModeSchemaTwoModes:
+    """Change A: only two output modes remain — `mode`'s enum shrinks to `file`/`worksheet`, and
+    every section gated on the old three-way split now depends on the correct one of the two."""
+
+    def _row_schema(self) -> dict:
+        return json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+
+    def test_mode_enum_has_exactly_file_and_worksheet(self):
+        mode = self._row_schema()["properties"]["mode"]
+        assert mode["enum"] == ["file", "worksheet"]
+        assert mode["options"]["enum_titles"] == ["File", "Worksheet"]
+        assert mode["default"] == "file"
+
+    def test_destination_depends_on_mode_file_only(self):
+        destination = self._row_schema()["properties"]["destination"]
+        assert destination["options"]["dependencies"] == {"mode": "file"}
+
+    def test_csv_depends_on_mode_file_only_and_is_retitled(self):
+        csv_section = self._row_schema()["properties"]["csv"]
+        assert csv_section["options"]["dependencies"] == {"mode": "file"}
+        assert csv_section["title"] == "CSV Options (for mapped tables)"
+
+    def test_workbook_and_worksheet_depend_on_mode_worksheet(self):
+        schema = self._row_schema()
+        assert schema["properties"]["workbook"]["options"]["dependencies"] == {"mode": "worksheet"}
+        assert schema["properties"]["worksheet"]["options"]["dependencies"] == {"mode": "worksheet"}
+
+    def test_append_and_batch_size_depend_on_mode_worksheet(self):
+        schema = self._row_schema()
+        assert schema["properties"]["append"]["options"]["dependencies"] == {"mode": "worksheet"}
+        assert schema["properties"]["batch_size"]["options"]["dependencies"] == {"mode": "worksheet"}
+
+
+class TestWorkbookTargetingSchema:
+    """Change B: `workbook.targeting` (pick vs. path) replaces the old "never combine with Path"
+    tooltip with real conditional visibility — the ids and the path field are now shown/hidden by
+    `options.dependencies` instead of relying on a warning sentence."""
+
+    def _workbook_properties(self) -> dict:
+        schema = json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+        return schema["properties"]["workbook"]["properties"]
+
+    def test_targeting_is_the_first_field_with_the_expected_shape(self):
+        properties = self._workbook_properties()
+        targeting = properties["targeting"]
+        assert targeting["enum"] == ["pick", "path"]
+        assert targeting["options"]["enum_titles"] == ["Pick via dropdowns", "By path"]
+        assert targeting["default"] == "pick"
+        assert targeting["propertyOrder"] == 1
+        assert all(targeting["propertyOrder"] < other["propertyOrder"] for name, other in properties.items() if name != "targeting")
+
+    def test_ids_depend_on_targeting_pick(self):
+        properties = self._workbook_properties()
+        assert properties["drive_id"]["options"]["dependencies"] == {"targeting": "pick"}
+        assert properties["file_id"]["options"]["dependencies"] == {"targeting": "pick"}
+
+    def test_path_depends_on_targeting_path(self):
+        properties = self._workbook_properties()
+        assert properties["path"]["options"]["dependencies"] == {"targeting": "path"}
+
+    def test_no_never_combine_tooltip_anywhere_in_the_row_schema(self):
+        # The whole "never combine with Path"-style sentence is gone — targeting is now enforced
+        # by real conditional visibility, not a warning the user has to notice and honor.
+        schema_text = (COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text().lower()
+        assert "never combine" not in schema_text
+
+
+class TestWorksheetSelectionSchema:
+    """Change C: `worksheet.selection` (pick vs. name) replaces id/position inference; `position`
+    is dropped from the UI schema entirely (kept only on the model, for v1-parity API configs).
+    No UI tooltip mentions renaming anymore, since neither explicit branch renames."""
+
+    def _worksheet_properties(self) -> dict:
+        schema = json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+        return schema["properties"]["worksheet"]["properties"]
+
+    def test_selection_is_the_first_field_with_the_expected_shape(self):
+        properties = self._worksheet_properties()
+        selection = properties["selection"]
+        assert selection["enum"] == ["pick", "name"]
+        assert selection["options"]["enum_titles"] == ["Pick existing", "By name (creates if missing)"]
+        assert selection["default"] == "pick"
+        assert selection["propertyOrder"] == 1
+        assert all(selection["propertyOrder"] < other["propertyOrder"] for name, other in properties.items() if name != "selection")
+
+    def test_id_depends_on_selection_pick(self):
+        properties = self._worksheet_properties()
+        assert properties["id"]["options"]["dependencies"] == {"selection": "pick"}
+
+    def test_name_depends_on_selection_name(self):
+        properties = self._worksheet_properties()
+        assert properties["name"]["options"]["dependencies"] == {"selection": "name"}
+
+    def test_position_field_is_absent_from_the_schema(self):
+        # `position` stays on the `configuration.Worksheet` model for v1-parity/API configs, but
+        # is deliberately not exposed as a UI field anymore.
+        assert "position" not in self._worksheet_properties()
+
+    def test_no_rename_mention_anywhere_in_the_worksheet_section(self):
+        schema = json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+        worksheet_text = json.dumps(schema["properties"]["worksheet"]).lower()
+        assert "rename" not in worksheet_text
 
 
 class TestRowSchemaHelperAccountType:

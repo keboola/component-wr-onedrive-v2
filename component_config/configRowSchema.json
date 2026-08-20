@@ -8,17 +8,15 @@
     "mode": {
       "type": "string",
       "title": "Output Mode",
-      "description": "How this row writes data to OneDrive/SharePoint — upload files as-is, write a table as CSV, or write a table into an Excel worksheet.",
+      "description": "How this row writes data — File uploads mapped files as-is and writes mapped tables as CSV files; Worksheet writes one mapped table into an Excel worksheet.",
       "enum": [
         "file",
-        "table_csv",
-        "table_excel"
+        "worksheet"
       ],
       "options": {
         "enum_titles": [
-          "Upload Files",
-          "Table as CSV",
-          "Table as Excel Worksheet"
+          "File",
+          "Worksheet"
         ]
       },
       "default": "file",
@@ -31,10 +29,7 @@
       "propertyOrder": 10,
       "options": {
         "dependencies": {
-          "mode": [
-            "file",
-            "table_csv"
-          ]
+          "mode": "file"
         }
       },
       "properties": {
@@ -111,12 +106,12 @@
     },
     "csv": {
       "type": "object",
-      "title": "CSV Options",
+      "title": "CSV Options (for mapped tables)",
       "format": "grid",
       "propertyOrder": 20,
       "options": {
         "dependencies": {
-          "mode": "table_csv"
+          "mode": "file"
         }
       },
       "properties": {
@@ -125,7 +120,7 @@
           "title": "File Name",
           "description": "Name of the uploaded CSV file",
           "options": {
-            "tooltip": "Defaults to the input table's name with a .csv extension when left empty."
+            "tooltip": "Only applies when exactly one table is mapped to this row. Defaults to the table's name with a .csv extension when left empty; leave empty when more than one table is mapped (each is then uploaded as '<table name>.csv')."
           },
           "propertyOrder": 1
         },
@@ -160,52 +155,78 @@
       "propertyOrder": 30,
       "options": {
         "dependencies": {
-          "mode": "table_excel"
+          "mode": "worksheet"
         }
       },
       "properties": {
+        "targeting": {
+          "type": "string",
+          "title": "Targeting",
+          "description": "How to target the workbook",
+          "enum": [
+            "pick",
+            "path"
+          ],
+          "options": {
+            "enum_titles": [
+              "Pick via dropdowns",
+              "By path"
+            ]
+          },
+          "default": "pick",
+          "propertyOrder": 1
+        },
         "path": {
           "type": "string",
           "title": "Workbook Path",
           "description": "Path to the target workbook; created automatically when missing",
           "options": {
-            "tooltip": "Accepts a library-relative path (/Reports/data.xlsx), drive://{driveId}/path, site://{siteName}/path, or an https:// sharing link. Use the search sync action to check whether it already exists. Leave empty and use the Library + Workbook pickers below instead."
+            "tooltip": "Accepts a library-relative path (/Reports/data.xlsx), drive://{driveId}/path, site://{siteName}/path, or an https:// sharing link. Use the search sync action to check whether it already exists.",
+            "dependencies": {
+              "targeting": "path"
+            }
           },
-          "propertyOrder": 1
+          "propertyOrder": 2
         },
         "drive_id": {
           "type": "string",
           "title": "Library",
           "format": "select",
           "enum": [],
-          "description": "Advanced targeting: document library of an existing workbook",
+          "description": "Document library of an existing workbook",
           "options": {
-            "tooltip": "Pick the document library that contains the workbook, then pick the workbook itself below — never combine with Path. For Private OneDrive/OneDrive for Business accounts this is always the account's own default drive.",
+            "tooltip": "Pick the document library that contains the workbook, then pick the workbook itself below. For Private OneDrive/OneDrive for Business accounts this is always the account's own default drive.",
             "async": {
               "label": "List Libraries",
               "action": "listLibraries",
               "autoload": true
+            },
+            "dependencies": {
+              "targeting": "pick"
             }
           },
-          "propertyOrder": 2
+          "propertyOrder": 3
         },
         "file_id": {
           "type": "string",
           "title": "Workbook",
           "format": "select",
           "enum": [],
-          "description": "Advanced targeting: an existing workbook in the selected library",
+          "description": "An existing workbook in the selected library",
           "options": {
-            "tooltip": "Lists the XLSX files found in the Library selected above — never combine with Path.",
+            "tooltip": "Lists the XLSX files found in the Library selected above.",
             "async": {
               "label": "List Workbooks",
               "action": "listWorkbooks",
               "autoload": [
                 "parameters.workbook.drive_id"
               ]
+            },
+            "dependencies": {
+              "targeting": "pick"
             }
           },
-          "propertyOrder": 3
+          "propertyOrder": 4
         },
         "metadata": {
           "type": [
@@ -216,7 +237,7 @@
           "options": {
             "hidden": true
           },
-          "propertyOrder": 4
+          "propertyOrder": 5
         }
       }
     },
@@ -227,17 +248,25 @@
       "propertyOrder": 40,
       "options": {
         "dependencies": {
-          "mode": "table_excel"
+          "mode": "worksheet"
         }
       },
       "properties": {
-        "name": {
+        "selection": {
           "type": "string",
-          "title": "Worksheet Name",
-          "description": "Name of the target worksheet; created if it doesn't exist",
+          "title": "Selection",
+          "description": "How to select the worksheet",
+          "enum": [
+            "pick",
+            "name"
+          ],
           "options": {
-            "tooltip": "Provide alone to select or create a worksheet by name. Combine with ID or Position to rename that worksheet to this name."
+            "enum_titles": [
+              "Pick existing",
+              "By name (creates if missing)"
+            ]
           },
+          "default": "pick",
           "propertyOrder": 1
         },
         "id": {
@@ -245,9 +274,9 @@
           "title": "Worksheet ID",
           "format": "select",
           "enum": [],
-          "description": "Advanced targeting: an existing worksheet in the workbook configured above",
+          "description": "An existing worksheet in the workbook configured above",
           "options": {
-            "tooltip": "Lists the worksheets found in the Workbook configured above (Path, or Library + Workbook). Mutually exclusive with Position — set only one of the two. Combine with Name to rename the worksheet.",
+            "tooltip": "Lists the worksheets found in the Workbook configured above.",
             "async": {
               "label": "List Worksheets",
               "action": "listWorksheets",
@@ -256,16 +285,22 @@
                 "parameters.workbook.drive_id",
                 "parameters.workbook.file_id"
               ]
+            },
+            "dependencies": {
+              "selection": "pick"
             }
           },
           "propertyOrder": 2
         },
-        "position": {
-          "type": "integer",
-          "title": "Worksheet Position",
-          "description": "Advanced targeting: zero-based worksheet tab position",
+        "name": {
+          "type": "string",
+          "title": "Worksheet Name",
+          "description": "Name of the target worksheet; created if it doesn't exist",
           "options": {
-            "tooltip": "Mutually exclusive with ID — set only one of the two. Combine with Name to rename the worksheet."
+            "tooltip": "Selects the worksheet by name, creating it if it doesn't exist yet.",
+            "dependencies": {
+              "selection": "name"
+            }
           },
           "propertyOrder": 3
         },
@@ -274,10 +309,10 @@
             "object",
             "null"
           ],
-          "title": "Metadata",
           "options": {
             "hidden": true
           },
+          "title": "Metadata",
           "propertyOrder": 4
         }
       }
@@ -290,7 +325,7 @@
       "default": false,
       "options": {
         "dependencies": {
-          "mode": "table_excel"
+          "mode": "worksheet"
         }
       },
       "propertyOrder": 50
@@ -303,7 +338,7 @@
       "minimum": 1,
       "options": {
         "dependencies": {
-          "mode": "table_excel"
+          "mode": "worksheet"
         }
       },
       "propertyOrder": 51
