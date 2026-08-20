@@ -49,11 +49,28 @@ class ConflictBehavior(StrEnum):
 
 
 class Mode(StrEnum):
-    """Row output mode."""
+    """Row output mode.
+
+    Only two modes exist going forward — ``file`` (uploads mapped files as-is *and* writes mapped
+    tables as CSV, merged from the old ``file``/``table_csv`` split) and ``worksheet`` (writes one
+    mapped table into an Excel worksheet, the old ``table_excel``). The pre-merge names are still
+    accepted as input (see :data:`_LEGACY_MODE_ALIASES`) — every already-recorded VCR cassette and
+    every platform row created before this change uses them — but are normalized to one of these
+    two members before any other validation runs, so the rest of the codebase only ever sees
+    ``FILE``/``WORKSHEET``.
+    """
 
     FILE = "file"
-    TABLE_CSV = "table_csv"
-    TABLE_EXCEL = "table_excel"
+    WORKSHEET = "worksheet"
+
+
+# Maps a pre-merge mode value to its current equivalent (`RowConfig._normalize_mode_alias`).
+# `"table_csv"` and `"file"` merge into one mode (`FILE` now processes both a file input mapping
+# and a table input mapping); `"table_excel"` is simply renamed to `"worksheet"`.
+_LEGACY_MODE_ALIASES: dict[str, str] = {
+    "table_csv": Mode.FILE.value,
+    "table_excel": Mode.WORKSHEET.value,
+}
 
 
 class Account(BaseModel):
@@ -81,7 +98,7 @@ class Account(BaseModel):
 
 
 class Destination(BaseModel):
-    """File + CSV mode target: document library / folder / conflict handling."""
+    """Mode 'file' target: document library / folder / conflict handling."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -101,7 +118,8 @@ class Destination(BaseModel):
 
 
 class CsvOptions(BaseModel):
-    """CSV file formatting options (mode=table_csv)."""
+    """CSV file formatting options for the tables mode 'file' maps (mapped files upload as-is,
+    unaffected by these options)."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -111,16 +129,37 @@ class CsvOptions(BaseModel):
     include_header: bool = True
 
 
-class Workbook(BaseModel):
-    """Excel workbook target (mode=table_excel) — v1-compatible field names.
+class WorkbookTargeting(StrEnum):
+    """How a row's ``workbook`` section targets a workbook (Change B UX addition).
 
-    v1 targeting rules: either ``path`` alone, or both ``drive_id`` and
-    ``file_id`` together. A lone id or a path combined with an id is invalid.
-    ``metadata`` is opaque UI file-picker storage — accepted and ignored.
+    ``PICK`` (UI default): target via the ``drive_id``/``file_id`` async-select dropdowns;
+    ``PATH``: target via a typed/looked-up ``path``. Explicitly choosing one makes the *other*
+    field's value irrelevant no matter what it holds — a stale value left over from switching
+    ``targeting`` back and forth in the UI can never break validation or get used by mistake.
+    """
+
+    PICK = "pick"
+    PATH = "path"
+
+
+class Workbook(BaseModel):
+    """Excel workbook target (mode=worksheet) — v1-compatible field names.
+
+    v1 targeting rules: either ``path`` alone, or both ``drive_id`` and ``file_id`` together. A
+    lone id or a path combined with an id is invalid. ``metadata`` is opaque UI file-picker
+    storage — accepted and ignored.
+
+    ``targeting`` (Change B UX addition) makes that choice explicit instead of inferring it from
+    which fields happen to be set: ``"pick"`` uses ``drive_id``/``file_id`` and ignores ``path``
+    entirely (cleared below, regardless of any stale value); ``"path"`` uses ``path`` and ignores
+    the ids the same way. ``targeting`` is absent for configs created before this change (row API
+    payloads, already-recorded VCR cassettes) — those keep today's v1 mutual-exclusivity check,
+    just with a friendlier message.
     """
 
     model_config = ConfigDict(extra="ignore")
 
+    targeting: WorkbookTargeting | None = None
     drive_id: str | None = None
     file_id: str | None = None
     path: str | None = None
@@ -129,16 +168,36 @@ class Workbook(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_blank_strings(cls, data: Any) -> Any:
-        return _pop_blank_strings(data, ("path", "drive_id", "file_id"))
+        return _pop_blank_strings(data, ("path", "drive_id", "file_id", "targeting"))
 
     @model_validator(mode="after")
     def _validate_target(self) -> Self:
+        if self.targeting == WorkbookTargeting.PICK:
+            if not self.drive_id or not self.file_id:
+                raise ValueError(
+                    'Targeting is set to "Pick via dropdowns": both workbook.drive_id and '
+                    "workbook.file_id are required."
+                )
+            self.path = None  # Ignore any stale/hidden Path value — pick mode never reads it.
+            return self
+
+        if self.targeting == WorkbookTargeting.PATH:
+            if not self.path:
+                raise ValueError('Targeting is set to "By path": workbook.path is required.')
+            self.drive_id = None  # Ignore any stale/hidden Library/Workbook picker values.
+            self.file_id = None
+            return self
+
+        # Legacy (no `targeting`): v1's own mutual-exclusivity rule, humanized (Change B).
         has_path = self.path is not None
         has_drive_id = self.drive_id is not None
         has_file_id = self.file_id is not None
 
         if has_path and (has_drive_id or has_file_id):
-            raise ValueError("workbook.path cannot be combined with workbook.drive_id/workbook.file_id.")
+            raise ValueError(
+                "Choose one way to target the workbook: either Library + Workbook (drive_id + "
+                "file_id), or Path — please clear the other. Got both."
+            )
 
         if not has_path:
             if has_drive_id != has_file_id:
@@ -151,17 +210,41 @@ class Workbook(BaseModel):
         return self
 
 
-class Worksheet(BaseModel):
-    """Excel worksheet target (mode=table_excel).
+class WorksheetSelection(StrEnum):
+    """How a row's ``worksheet`` section picks its target sheet (Change C UX addition).
 
-    ``id`` and ``position`` are mutually exclusive; ``name`` may be combined
-    with either (or given alone, e.g. for worksheet creation). At least one of
-    ``id``/``name``/``position`` must be provided. ``position`` accepts
+    ``PICK`` (UI default): target the sheet by ``id`` (the ``listWorksheets`` async select) with
+    no rename; ``NAME``: target/create the sheet by ``name`` alone. ``position`` has been dropped
+    from the UI entirely — it's kept on the model only so v1-parity/API-created rows that still
+    set it (without ``selection``) keep working. Explicitly choosing one makes the *other*
+    field(s) irrelevant no matter what they hold — switching ``selection`` back and forth in the
+    UI can leave a stale hidden ``id``/``name``/``position`` that must never get used by mistake.
+    """
+
+    PICK = "pick"
+    NAME = "name"
+
+
+class Worksheet(BaseModel):
+    """Excel worksheet target (mode=worksheet).
+
+    v1/legacy targeting (no ``selection``): ``id`` and ``position`` are mutually exclusive;
+    ``name`` may be combined with either (renaming that sheet) or given alone (select-or-create by
+    name). At least one of ``id``/``name``/``position`` must be provided. ``position`` accepts
     numeric strings (v1 configs hold both string and int forms).
+
+    ``selection`` (Change C UX addition) replaces that inference with an explicit choice: ``pick``
+    uses ``id`` and ignores ``name``/``position`` (cleared below — no rename, matching the "Pick
+    existing" UI label); ``name`` uses ``name`` alone (creating the sheet if missing) and ignores
+    ``id``/``position`` the same way. ``selection`` is absent for configs created before this
+    change (row API payloads, already-recorded VCR cassettes, and any row still holding a
+    v1-parity ``position``) — those keep today's rename-on-combine behavior, just with a
+    friendlier mutual-exclusivity message.
     """
 
     model_config = ConfigDict(extra="ignore")
 
+    selection: WorksheetSelection | None = None
     id: str | None = None
     name: str | None = None
     position: int | None = None
@@ -170,12 +253,12 @@ class Worksheet(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_inputs(cls, data: Any) -> Any:
-        """Pop blank ``id``/``name``/``position`` strings (UI untouched-field convention), then
-        coerce a still-present numeric-string ``position`` to ``int`` (v1 configs hold both string
-        and int forms). Blank-popping must run first: an empty ``position`` string must become
-        ``None``, not be handed to ``int("")`` and crash.
+        """Pop blank ``id``/``name``/``position``/``selection`` strings (UI untouched-field
+        convention), then coerce a still-present numeric-string ``position`` to ``int`` (v1
+        configs hold both string and int forms). Blank-popping must run first: an empty
+        ``position`` string must become ``None``, not be handed to ``int("")`` and crash.
         """
-        data = _pop_blank_strings(data, ("id", "name", "position"))
+        data = _pop_blank_strings(data, ("id", "name", "position", "selection"))
         if isinstance(data, dict) and isinstance(data.get("position"), str):
             raw = data["position"]
             try:
@@ -186,8 +269,28 @@ class Worksheet(BaseModel):
 
     @model_validator(mode="after")
     def _validate_selector(self) -> Self:
+        if self.selection == WorksheetSelection.PICK:
+            if not self.id:
+                raise ValueError('Selection is set to "Pick existing": worksheet.id is required.')
+            self.name = None  # Ignore any stale/hidden Name value — pick mode never renames.
+            self.position = None
+            return self
+
+        if self.selection == WorksheetSelection.NAME:
+            if not self.name:
+                raise ValueError(
+                    'Selection is set to "By name (creates if missing)": worksheet.name is required.'
+                )
+            self.id = None  # Ignore any stale/hidden ID/Position values.
+            self.position = None
+            return self
+
+        # Legacy (no `selection`): v1's own mutual-exclusivity rule, humanized (Change C).
         if self.id is not None and self.position is not None:
-            raise ValueError("worksheet.id and worksheet.position are mutually exclusive.")
+            raise ValueError(
+                "Choose one way to target the worksheet: either ID, or Position — please clear "
+                "the other. Got both."
+            )
         if self.id is None and self.position is None and self.name is None:
             raise ValueError("worksheet requires at least one of id, name, or position.")
         return self
@@ -211,11 +314,25 @@ class RowConfig(BaseModel):
     # (phase 8 audit IMPORTANT-4).
     batch_size: int = Field(default=5000, gt=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_mode_alias(cls, data: Any) -> Any:
+        """Silently map a pre-merge ``mode`` value (``table_csv``/``table_excel``) to its current
+        equivalent (:data:`_LEGACY_MODE_ALIASES`) before ``Mode`` itself ever sees it.
+
+        Every already-recorded VCR cassette config and every row created on the platform before
+        this change uses the old names — this keeps them working unchanged, with no re-recording
+        and no forced re-save, rather than requiring every existing config to be touched.
+        """
+        if isinstance(data, dict) and isinstance(data.get("mode"), str) and data["mode"] in _LEGACY_MODE_ALIASES:
+            data = {**data, "mode": _LEGACY_MODE_ALIASES[data["mode"]]}
+        return data
+
     @model_validator(mode="after")
     def _validate_mode_requirements(self) -> Self:
-        if self.mode == Mode.TABLE_EXCEL:
+        if self.mode == Mode.WORKSHEET:
             if self.workbook is None:
-                raise ValueError("workbook configuration is required when mode is 'table_excel'.")
+                raise ValueError("workbook configuration is required when mode is 'worksheet'.")
             if self.worksheet is None:
-                raise ValueError("worksheet configuration is required when mode is 'table_excel'.")
+                raise ValueError("worksheet configuration is required when mode is 'worksheet'.")
         return self

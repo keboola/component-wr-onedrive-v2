@@ -10,7 +10,9 @@ from configuration import (
     Mode,
     RowConfig,
     Workbook,
+    WorkbookTargeting,
     Worksheet,
+    WorksheetSelection,
 )
 
 
@@ -123,7 +125,8 @@ class TestWorkbook:
             Workbook(file_id="file-1")
 
     def test_path_and_ids_together_is_invalid(self):
-        with pytest.raises(ValidationError, match="cannot be combined"):
+        # Change B: humanized legacy (no `targeting`) mutual-exclusivity message.
+        with pytest.raises(ValidationError, match="Choose one way to target the workbook"):
             Workbook(path="/book.xlsx", drive_id="drive-1", file_id="file-1")
 
     def test_neither_path_nor_ids_is_invalid(self):
@@ -175,7 +178,8 @@ class TestWorksheet:
             Worksheet(position="first")
 
     def test_id_and_position_together_is_invalid(self):
-        with pytest.raises(ValidationError, match="mutually exclusive"):
+        # Change C: humanized legacy (no `selection`) mutual-exclusivity message.
+        with pytest.raises(ValidationError, match="Choose one way to target the worksheet"):
             Worksheet(id="sheet-1", position=0)
 
     def test_id_and_name_together_is_valid(self):
@@ -225,25 +229,21 @@ class TestRowConfig:
         assert config.workbook is None
         assert config.worksheet is None
 
-    def test_table_csv_mode_minimal_config(self):
-        config = RowConfig(mode="table_csv", account=self._account_params())
-        assert config.mode == Mode.TABLE_CSV
-
-    def test_table_excel_requires_workbook_and_worksheet(self):
+    def test_worksheet_mode_requires_workbook_and_worksheet(self):
         with pytest.raises(ValidationError, match="workbook configuration is required"):
-            RowConfig(mode="table_excel", account=self._account_params())
+            RowConfig(mode="worksheet", account=self._account_params())
 
-    def test_table_excel_requires_worksheet_even_with_workbook(self):
+    def test_worksheet_mode_requires_worksheet_even_with_workbook(self):
         with pytest.raises(ValidationError, match="worksheet configuration is required"):
             RowConfig(
-                mode="table_excel",
+                mode="worksheet",
                 account=self._account_params(),
                 workbook={"path": "/book.xlsx"},
             )
 
-    def test_table_excel_with_workbook_and_worksheet_is_valid(self):
+    def test_worksheet_mode_with_workbook_and_worksheet_is_valid(self):
         config = RowConfig(
-            mode="table_excel",
+            mode="worksheet",
             account=self._account_params(),
             workbook={"path": "/book.xlsx"},
             worksheet={"name": "Sheet1"},
@@ -281,7 +281,7 @@ class TestRowConfig:
 
     def test_full_merged_parameters_shape_from_spec(self):
         merged_parameters = {
-            "mode": "table_excel",
+            "mode": "table_excel",  # legacy alias — also exercises Change A's normalization end-to-end
             "account": {
                 "account_type": "sharepoint",
                 "tenant_id": "00000000-0000-0000-0000-000000000000",
@@ -314,7 +314,7 @@ class TestRowConfig:
 
         config = RowConfig.model_validate(merged_parameters)
 
-        assert config.mode == Mode.TABLE_EXCEL
+        assert config.mode == Mode.WORKSHEET
         assert config.account.account_type == AccountType.SHAREPOINT
         assert config.destination.conflict_behavior == ConflictBehavior.REPLACE
         assert config.csv.delimiter == ";"
@@ -326,3 +326,136 @@ class TestRowConfig:
     def test_account_error_propagates_through_row_config(self):
         with pytest.raises(ValidationError, match="account.tenant_id is required"):
             RowConfig(mode="file", account={"account_type": "sharepoint"})
+
+
+class TestModeAliasNormalization:
+    """Change A: the pre-merge mode names are silently accepted and normalized — every
+    already-recorded VCR cassette config and every platform row created before this change uses
+    them, and none of them should ever need to be re-saved or re-recorded."""
+
+    def _account_params(self):
+        return {"account_type": "private_onedrive"}
+
+    def test_table_csv_alias_normalizes_to_file(self):
+        config = RowConfig(mode="table_csv", account=self._account_params())
+        assert config.mode == Mode.FILE
+
+    def test_table_excel_alias_normalizes_to_worksheet(self):
+        config = RowConfig(
+            mode="table_excel",
+            account=self._account_params(),
+            workbook={"path": "/book.xlsx"},
+            worksheet={"name": "Sheet1"},
+        )
+        assert config.mode == Mode.WORKSHEET
+
+    def test_canonical_names_pass_through_unchanged(self):
+        assert RowConfig(mode="file", account=self._account_params()).mode == Mode.FILE
+
+    def test_unrecognized_mode_value_still_raises(self):
+        # A typo'd/unknown mode must not be silently swallowed by the alias lookup.
+        with pytest.raises(ValidationError):
+            RowConfig(mode="not_a_real_mode", account=self._account_params())
+
+
+class TestWorkbookTargeting:
+    """Change B: `workbook.targeting` makes the "pick via dropdowns" vs. "by path" choice
+    explicit, ignoring whatever the *other* form's field(s) happen to hold — a stale hidden value
+    left over from switching `targeting` back and forth in the UI can never break validation or
+    get used by mistake."""
+
+    def test_pick_requires_both_ids(self):
+        with pytest.raises(ValidationError, match="both workbook.drive_id and workbook.file_id are required"):
+            Workbook(targeting="pick")
+
+    def test_pick_with_only_drive_id_is_invalid(self):
+        with pytest.raises(ValidationError, match="both workbook.drive_id and workbook.file_id are required"):
+            Workbook(targeting="pick", drive_id="drive-1")
+
+    def test_pick_with_both_ids_is_valid(self):
+        workbook = Workbook(targeting=WorkbookTargeting.PICK, drive_id="drive-1", file_id="file-1")
+        assert workbook.drive_id == "drive-1"
+        assert workbook.file_id == "file-1"
+        assert workbook.path is None
+
+    def test_pick_ignores_a_stale_hidden_path(self):
+        workbook = Workbook(targeting="pick", drive_id="drive-1", file_id="file-1", path="/stale.xlsx")
+        assert workbook.path is None
+        assert workbook.drive_id == "drive-1"
+        assert workbook.file_id == "file-1"
+
+    def test_path_requires_path(self):
+        with pytest.raises(ValidationError, match='"By path": workbook.path is required'):
+            Workbook(targeting="path")
+
+    def test_path_with_path_is_valid(self):
+        workbook = Workbook(targeting=WorkbookTargeting.PATH, path="/book.xlsx")
+        assert workbook.path == "/book.xlsx"
+        assert workbook.drive_id is None
+        assert workbook.file_id is None
+
+    def test_path_ignores_stale_hidden_ids(self):
+        workbook = Workbook(targeting="path", path="/book.xlsx", drive_id="stale-drive", file_id="stale-file")
+        assert workbook.path == "/book.xlsx"
+        assert workbook.drive_id is None
+        assert workbook.file_id is None
+
+    def test_blank_targeting_string_is_treated_as_legacy(self):
+        # UI untouched-field convention: an unset select still submits "".
+        workbook = Workbook.model_validate({"targeting": "", "path": "/book.xlsx"})
+        assert workbook.targeting is None
+        assert workbook.path == "/book.xlsx"
+
+    def test_legacy_ids_only_is_still_valid_without_targeting(self):
+        workbook = Workbook(drive_id="drive-1", file_id="file-1")
+        assert workbook.targeting is None
+        assert workbook.drive_id == "drive-1"
+
+
+class TestWorksheetSelection:
+    """Change C: `worksheet.selection` makes the "pick existing" vs. "by name" choice explicit,
+    ignoring whatever the *other* form's field(s) happen to hold (including a legacy `position`
+    value) — no rename ever happens under either explicit branch."""
+
+    def test_pick_requires_id(self):
+        with pytest.raises(ValidationError, match='"Pick existing": worksheet.id is required'):
+            Worksheet(selection="pick")
+
+    def test_pick_with_id_is_valid(self):
+        worksheet = Worksheet(selection=WorksheetSelection.PICK, id="sheet-1")
+        assert worksheet.id == "sheet-1"
+        assert worksheet.name is None
+
+    def test_pick_ignores_stale_hidden_name_and_position(self):
+        worksheet = Worksheet(selection="pick", id="sheet-1", name="StaleRenameTarget", position=3)
+        assert worksheet.id == "sheet-1"
+        assert worksheet.name is None  # no rename under "pick"
+        assert worksheet.position is None
+
+    def test_name_requires_name(self):
+        with pytest.raises(ValidationError, match='"By name \\(creates if missing\\)": worksheet.name is required'):
+            Worksheet(selection="name")
+
+    def test_name_with_name_is_valid(self):
+        worksheet = Worksheet(selection=WorksheetSelection.NAME, name="Sheet1")
+        assert worksheet.name == "Sheet1"
+        assert worksheet.id is None
+
+    def test_name_ignores_stale_hidden_id_and_position(self):
+        worksheet = Worksheet(selection="name", name="Sheet1", id="stale-id", position=2)
+        assert worksheet.name == "Sheet1"
+        assert worksheet.id is None
+        assert worksheet.position is None
+
+    def test_blank_selection_string_is_treated_as_legacy(self):
+        worksheet = Worksheet.model_validate({"selection": "", "name": "Sheet1"})
+        assert worksheet.selection is None
+        assert worksheet.name == "Sheet1"
+
+    def test_legacy_id_and_name_together_still_renames_without_selection(self):
+        # v1-parity behavior preserved exactly when `selection` is absent (row API payloads,
+        # already-recorded VCR cassette configs).
+        worksheet = Worksheet(id="sheet-1", name="Renamed")
+        assert worksheet.selection is None
+        assert worksheet.id == "sheet-1"
+        assert worksheet.name == "Renamed"
