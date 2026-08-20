@@ -3,7 +3,7 @@ error mapping, and token-state persistence.
 
 Design spec: ``docs/superpowers/specs/2026-08-17-wr-onedrive-v2-design.md`` §2 (scratch files,
 state) and §6 (run orchestration, error mapping). Follows the datadir-style `KBC_DATADIR` fixture
-pattern already used in ``tests/test_component.py``, extended with `data/in/files` and
+pattern already used in ``tests/component/test_component.py``, extended with `data/in/files` and
 `data/in/tables` content for file/CSV mode.
 """
 
@@ -682,7 +682,7 @@ class TestExcelMode:
     """Excel mode wiring (plan Task 8): personal-account gate, empty CSV, happy-path plumbing.
 
     `resolve_workbook`/`workbook_session`/`resolve_worksheet`/`write_table` themselves are
-    exercised at the unit level in ``tests/test_excel_writer.py`` (plan Task 7); these tests only
+    exercised at the unit level in ``tests/unit/test_excel_writer.py`` (plan Task 7); these tests only
     assert `Component._run_excel_mode` wires them together correctly.
     """
 

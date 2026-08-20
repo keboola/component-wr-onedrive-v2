@@ -423,7 +423,7 @@ class TestSyncActionWorkbookTargetingCompatibility:
     which already picks up `configuration.Workbook`'s new `targeting` switch and its
     ignore-the-other-form semantics for free — these tests are the sync-action-level proof that
     "pick" and "path" targeting, plus a stale hidden value from the form not currently selected,
-    all resolve exactly as they do for a row-run (`tests/test_configuration.py`'s model-level
+    all resolve exactly as they do for a row-run (`tests/unit/test_configuration.py`'s model-level
     tests already cover every branch of that logic directly)."""
 
     def test_list_worksheets_targeting_pick_ignores_a_stale_hidden_path(self, tmp_path):

@@ -1,7 +1,7 @@
 """Unit tests for `client.headers` — v1-parity table-header normalization (plan Task 8).
 
 Values are taken directly from ``keboola.wr-onedrive`` (v1, PHP)'s own test fixtures
-(``tests/datadir/get-worksheets-*``, copied into ``tests/fixtures/v1_parity``) so this is a
+(``tests/datadir/get-worksheets-*``, copied into ``tests/parity/golden``) so this is a
 byte-for-byte port of ``Api\\Helpers::toAscii`` + ``Api\\Model\\TableHeader::parseColumns``, not a
 reinvention.
 """

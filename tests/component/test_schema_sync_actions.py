@@ -13,7 +13,7 @@ from keboola.component.base import _SYNC_ACTION_MAPPING
 
 import component  # noqa: F401 - importing populates `_SYNC_ACTION_MAPPING` (decorators run on import)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPONENT_CONFIG_DIR = REPO_ROOT / "component_config"
 
 # The Docker test image copies only src/ and tests/ (canonical template), so the schema files are

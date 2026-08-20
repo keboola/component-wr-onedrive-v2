@@ -7,7 +7,7 @@ Microsoft Graph HTTP cassette (`source/data/cassettes/requests.json`) plus captu
 action output / expected exit code.
 
 Every scenario declared in `tests/setup/configs.json` has been recorded against the real
-Microsoft 365 test tenant and its cassette is committed here — `tests/test_functional_vcr.py`
+Microsoft 365 test tenant and its cassette is committed here — `tests/e2e/test_functional_vcr.py`
 replays all of them fully offline (no network access, no credentials needed). The harness still
 supports the other two states it was designed for (not-yet-recorded scenarios report as an
 explicit, individually-named `pytest` **skip**; a human with real `secrets.json` credentials can
@@ -59,7 +59,7 @@ The script:
 
 Scope decision (2026-08-18): record against **Business + SharePoint account types only**.
 Personal-OneDrive flows are already covered by the mocked `GraphFake` suite
-(`tests/test_functional_http.py`) — no personal-account cassettes are recorded.
+(`tests/e2e/test_functional_http.py`) — no personal-account cassettes are recorded.
 
 **Update (2026-08-19, `listLibraries`/`listWorkbooks`/`listWorksheets` dropdown UX addition):**
 `GET /me/drive` (used by `listLibraries`'s new `onedrive_for_business`/`private_onedrive`
@@ -67,7 +67,7 @@ default-drive branch, and by `listWorkbooks`'s/`_resolve_picker_drive_id`'s fall
 account types) `403`s with `notAllowed` against this test tenant's authorized user — it has no
 provisioned personal OneDrive. That business/private-account branch is therefore **not
 recordable here** and is covered by mocked unit tests only
-(`tests/test_component.py::TestListLibraries`/`TestListWorkbooks`); no cassette exists for it, and
+(`tests/component/test_component.py::TestListLibraries`/`TestListWorkbooks`); no cassette exists for it, and
 none should be recorded as if the call actually succeeded. `listWorkbooks`/`listWorksheets`
 themselves are recorded against the SharePoint account (16/17 above), same as every other
 scenario in this scope decision.

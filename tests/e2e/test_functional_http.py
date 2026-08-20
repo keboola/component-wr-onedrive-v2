@@ -3,7 +3,7 @@
 Design spec: ``docs/superpowers/specs/2026-08-17-wr-onedrive-v2-design.md`` §7 "Testing" —
 "Datadir tests (single merged ``config.json`` shape ... state files row-scoped)". Unlike every
 other test module in this suite (which mocks the component's own collaborators — ``GraphClient``,
-``resolve_drive_id``, ``upload_file``, etc. — see ``tests/test_run_modes.py``), these tests run
+``resolve_drive_id``, ``upload_file``, etc. — see ``tests/component/test_run_modes.py``), these tests run
 the **real** production code path (``Component.run()``, drive resolution, the uploader, the Excel
 writer) end-to-end and mock only the HTTP transport boundary: ``requests.Session.request`` is
 patched with a small fake router (:class:`GraphFake`) that serves realistic Microsoft Graph JSON
@@ -28,7 +28,7 @@ scenario is supposed to exit non-zero. That makes it unsuitable for a suite wher
 required scenarios are deliberate ``UserException``/exit-1 cases sitting side by side with
 exit-0 happy paths in the same run. Instead, ``comp.run()`` is called in-process and asserted via
 ``pytest.raises(UserException)`` (exit 1) or a clean return (exit 0) — the same idiom already
-used by ``tests/test_run_modes.py``/``tests/test_component.py``, just with HTTP mocked instead of
+used by ``tests/component/test_run_modes.py``/``tests/component/test_component.py``, just with HTTP mocked instead of
 the component's own collaborators. ``TestEntrypointExitCodeMapping`` below additionally runs
 ``src/component.py`` as a real subprocess for one scenario, to assert the literal process exit
 code (1) end-to-end without touching the ``keboola.datadirtest``/``SystemExit`` hazard at all.
@@ -53,7 +53,7 @@ from component import Component
 BASE_URL = "https://graph.microsoft.com/v1.0"
 _TOKEN_URL_RE = re.compile(r"^https://login\.microsoftonline\.com/[^/]+/oauth2/v2\.0/token$")
 
-_SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+_SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 _COMPONENT_SCRIPT = _SRC_DIR / "component.py"
 
 

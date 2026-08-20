@@ -1,6 +1,6 @@
 """VCR functional tests for keboola.wr-onedrive-v2 (plan Task 11 — "VCR harness + cassettes").
 
-Complements, rather than replaces, ``tests/test_functional_http.py`` (the hand-rolled
+Complements, rather than replaces, ``tests/e2e/test_functional_http.py`` (the hand-rolled
 ``GraphFake``-backed functional layer built in Task 10, kept because
 ``keboola.datadirtest``'s plain ``DataDirTester``/``TestDataDir`` re-enters ``component.py``'s own
 ``if __name__ == "__main__":`` block via ``runpy.run_path(..., run_name="__main__")``, whose
@@ -50,7 +50,7 @@ from pathlib import Path
 import pytest
 from keboola.datadirtest.vcr import VCRDataDirTester
 
-_TESTS_DIR = Path(__file__).parent
+_TESTS_DIR = Path(__file__).resolve().parents[1]
 FUNCTIONAL_DIR = str(_TESTS_DIR / "functional")
 _SRC_DIR = _TESTS_DIR.parent / "src"
 COMPONENT_SCRIPT = str(_SRC_DIR / "component.py")

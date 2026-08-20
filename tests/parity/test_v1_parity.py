@@ -1,12 +1,12 @@
 """Golden tests: v1-parity sync-action output shapes (plan Task 8).
 
-Fixtures under ``tests/fixtures/v1_parity/`` are ``expected-stdout``/``expected-stderr`` files
+Fixtures under ``tests/parity/golden/`` are ``expected-stdout``/``expected-stderr`` files
 copied verbatim from ``keboola.wr-onedrive`` (v1, PHP)'s own datadir test suite
 (``tests/datadir/<case>/``) — see the design spec §5 "byte-compatible v1 output shapes". Each
 test here builds a `Component` with a mocked `GraphClient` whose ``get``/``post``/``put``
 responses are shaped like real Microsoft Graph payloads, invokes the sync-action method
 *directly* (bypassing `keboola.component.base.sync_action`'s stdout/exit(1) wrapper — the same
-`action: "run"` trick ``tests/test_component.py`` already uses), and asserts the result against
+`action: "run"` trick ``tests/component/test_component.py`` already uses), and asserts the result against
 the golden fixture.
 
 v1's own placeholders (``%s``/``%a``/``%A``, from its PHPUnit-based ``assertStringMatchesFormat``
@@ -38,7 +38,7 @@ from client.exceptions import GraphBadRequestError, GraphNotFoundError
 from client.graph_client import GraphClient
 from component import Component
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures" / "v1_parity"
+FIXTURES_DIR = Path(__file__).parent / "golden"
 
 
 def _oauth_credentials() -> dict:
