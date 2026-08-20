@@ -134,15 +134,116 @@ class TestFileMode:
             assert call_args.args[2] == "parent-1"
             assert call_args.args[5] == "replace"
 
-    def test_zero_files_raises_user_exception(self, tmp_path):
+    def test_zero_files_and_zero_tables_raises_user_exception(self, tmp_path):
+        # Change A: mode 'file' now processes both input mappings, so the "nothing to do" check
+        # covers both — zero files *and* zero tables is required to trigger it.
         parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
-        comp = _build_component(tmp_path, parameters, files={})
+        comp = _build_component(tmp_path, parameters, files={}, tables={})
 
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
             mock.patch("component.resolve_drive_id", return_value="drive-1"),
-            pytest.raises(UserException, match="No files found in the input mapping"),
+            pytest.raises(UserException, match="No files or tables found in the input mapping"),
+        ):
+            comp.run()
+
+
+class TestFileModeMergedTableInput:
+    """Change A: mode 'file' now processes *both* of the row's input mappings — every file from
+    the file input mapping uploaded as-is, and every table from the table input mapping written
+    as CSV (merged from the pre-merge 'file'/'table_csv' split)."""
+
+    def test_tables_only_writes_each_table_as_csv(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}) as mock_upload,
+        ):
+            comp.run()
+
+        assert mock_upload.call_count == 1
+        assert mock_upload.call_args.args[4] == "mytable.csv"
+
+    def test_files_and_tables_together_are_both_uploaded(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(
+            tmp_path, parameters, files={"a.txt": b"aaa"}, tables={"mytable": "id,name\n1,a\n"}
+        )
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}) as mock_upload,
+        ):
+            comp.run()
+
+        assert mock_upload.call_count == 2
+        uploaded_names = {call_args.args[4] for call_args in mock_upload.call_args_list}
+        assert uploaded_names == {"a.txt", "mytable.csv"}
+
+    def test_multiple_tables_each_become_their_own_csv(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(
+            tmp_path, parameters, tables={"a.csv": "id\n1\n", "b.csv": "id\n2\n"}
+        )
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}) as mock_upload,
+        ):
+            comp.run()
+
+        assert mock_upload.call_count == 2
+        uploaded_names = {call_args.args[4] for call_args in mock_upload.call_args_list}
+        assert uploaded_names == {"a.csv", "b.csv"}
+
+    def test_csv_file_name_applies_when_exactly_one_table_is_mapped(self, tmp_path):
+        parameters = {
+            "mode": "file",
+            "account": {"account_type": "private_onedrive"},
+            "destination": {},
+            "csv": {"file_name": "custom.csv"},
+        }
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id\n1\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}) as mock_upload,
+        ):
+            comp.run()
+
+        assert mock_upload.call_args.args[4] == "custom.csv"
+
+    def test_csv_file_name_with_multiple_tables_raises_user_exception(self, tmp_path):
+        parameters = {
+            "mode": "file",
+            "account": {"account_type": "private_onedrive"},
+            "destination": {},
+            "csv": {"file_name": "custom.csv"},
+        }
+        comp = _build_component(
+            tmp_path, parameters, tables={"a.csv": "id\n1\n", "b.csv": "id\n2\n"}
+        )
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            pytest.raises(UserException, match="csv.file_name can only be used when exactly one table is mapped"),
         ):
             comp.run()
 
@@ -264,46 +365,19 @@ class TestDestinationDateFolderPath:
 
 
 class TestIgnoredInputWarnings:
-    """Change 4: a one-line warning when a row's *other* input mapping is non-empty but unused
-    by the configured mode — e.g. a row copied from a `table_csv` row that still carries its old
-    table mapping when switched to mode `file`."""
+    """Change A: mode 'file' no longer warns about an ignored table input mapping — it now
+    processes both input mappings, so a table mapping is never ignored there anymore (the old
+    "table input mapping is ignored" warning is gone entirely). Mode 'worksheet' keeps its own
+    "file input mapping is ignored" warning unchanged — it still only ever reads its single input
+    table."""
 
-    def test_file_mode_warns_when_table_input_mapping_is_also_present(self, tmp_path, caplog):
-        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
-        comp = _build_component(
-            tmp_path, parameters, files={"a.txt": b"aaa"}, tables={"ignored": "id\n1\n"}
-        )
-
-        with (
-            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
-            mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
-            mock.patch("component.ensure_folder", return_value="root-id"),
-            mock.patch("component.upload_file", return_value={"id": "item-1"}),
-            caplog.at_level("WARNING"),
-        ):
-            comp.run()
-
-        assert any("table input mapping is ignored" in message for message in caplog.messages)
-
-    def test_file_mode_no_warning_when_table_input_mapping_is_empty(self, tmp_path, caplog):
-        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
-        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
-
-        with (
-            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
-            mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
-            mock.patch("component.ensure_folder", return_value="root-id"),
-            mock.patch("component.upload_file", return_value={"id": "item-1"}),
-            caplog.at_level("WARNING"),
-        ):
-            comp.run()
-
-        assert not any("table input mapping is ignored" in message for message in caplog.messages)
-
-    def test_csv_mode_warns_when_file_input_mapping_is_also_present(self, tmp_path, caplog):
-        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+    def test_worksheet_mode_warns_when_file_input_mapping_is_also_present(self, tmp_path, caplog):
+        parameters = {
+            "mode": "worksheet",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
         comp = _build_component(
             tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"}, files={"ignored.txt": b"x"}
         )
@@ -311,18 +385,45 @@ class TestIgnoredInputWarnings:
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
-            mock.patch("component.ensure_folder", return_value="root-id"),
-            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+            mock.patch("component.resolve_workbook", return_value=("wb-drive", "wb-file", False)),
+            mock.patch("component.workbook_session", return_value=_fake_session_context_manager("session-1")),
+            mock.patch("component.resolve_worksheet", return_value=("sheet-1", False, "Sheet1")),
+            mock.patch("component.write_table", return_value=True),
             caplog.at_level("WARNING"),
         ):
             comp.run()
 
         assert any("file input mapping is ignored" in message for message in caplog.messages)
 
-    def test_csv_mode_no_warning_when_file_input_mapping_is_empty(self, tmp_path, caplog):
-        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+    def test_worksheet_mode_no_warning_when_file_input_mapping_is_empty(self, tmp_path, caplog):
+        parameters = {
+            "mode": "worksheet",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
         comp = _build_component(tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_workbook", return_value=("wb-drive", "wb-file", False)),
+            mock.patch("component.workbook_session", return_value=_fake_session_context_manager("session-1")),
+            mock.patch("component.resolve_worksheet", return_value=("sheet-1", False, "Sheet1")),
+            mock.patch("component.write_table", return_value=True),
+            caplog.at_level("WARNING"),
+        ):
+            comp.run()
+
+        assert not any("file input mapping is ignored" in message for message in caplog.messages)
+
+    def test_file_mode_never_warns_about_the_table_input_mapping(self, tmp_path, caplog):
+        """The pre-merge "table input mapping is ignored" warning is gone (Change A) — mode
+        'file' now uses a mapped table (writing it as CSV) rather than ignoring it."""
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(
+            tmp_path, parameters, files={"a.txt": b"aaa"}, tables={"used": "id\n1\n"}
+        )
 
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
@@ -334,31 +435,43 @@ class TestIgnoredInputWarnings:
         ):
             comp.run()
 
-        assert not any("file input mapping is ignored" in message for message in caplog.messages)
+        assert not any("ignored" in message for message in caplog.messages)
 
 
-class TestCsvModeCardinality:
+class TestWorksheetModeCardinality:
+    """Mode 'worksheet' (the pre-merge 'table_excel') still requires exactly one input table —
+    `_require_single_input_table`'s v1-parity messages are unaffected by Change A's file-mode
+    merge, which only touches mode 'file'."""
+
     def test_zero_tables_raises_v1_parity_message(self, tmp_path):
-        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        parameters = {
+            "mode": "worksheet",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
         comp = _build_component(tmp_path, parameters, tables={})
 
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
             pytest.raises(UserException, match=re.escape('No CSV file found in "/data/in/tables".')),
         ):
             comp.run()
 
     def test_multiple_tables_raises_v1_parity_message_comma_joined(self, tmp_path):
-        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        parameters = {
+            "mode": "worksheet",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
         comp = _build_component(tmp_path, parameters, tables={"a.csv": "id\n1\n", "b.csv": "id\n2\n"})
         expected = re.escape('Expected one CSV file, found multiple: "a.csv", "b.csv".')
 
         with (
             mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
             mock.patch("component.GraphClient", return_value=MagicMock()),
-            mock.patch("component.resolve_drive_id", return_value="drive-1"),
             pytest.raises(UserException, match=expected),
         ):
             comp.run()

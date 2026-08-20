@@ -417,6 +417,93 @@ class TestListWorksheets:
             comp.list_worksheets()
 
 
+class TestSyncActionWorkbookTargetingCompatibility:
+    """Change D: `listWorksheets`/`getWorksheets`/`createWorksheet` all read `parameters.workbook`
+    through `Component._load_workbook_param` (`Workbook.model_validate(workbook_params or {})`),
+    which already picks up `configuration.Workbook`'s new `targeting` switch and its
+    ignore-the-other-form semantics for free — these tests are the sync-action-level proof that
+    "pick" and "path" targeting, plus a stale hidden value from the form not currently selected,
+    all resolve exactly as they do for a row-run (`tests/test_configuration.py`'s model-level
+    tests already cover every branch of that logic directly)."""
+
+    def test_list_worksheets_targeting_pick_ignores_a_stale_hidden_path(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {
+                "targeting": "pick",
+                "drive_id": "drive-1",
+                "file_id": "file-1",
+                "path": "/stale-from-path-mode.xlsx",
+            },
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch(
+                "component.resolve_workbook", return_value=("drive-1", "file-1", False)
+            ) as mock_resolve_workbook,
+            mock.patch("component.list_worksheets_summary", return_value=[]),
+        ):
+            comp.list_worksheets()
+
+        resolved_workbook = mock_resolve_workbook.call_args.args[2]
+        assert resolved_workbook.path is None
+        assert resolved_workbook.drive_id == "drive-1"
+        assert resolved_workbook.file_id == "file-1"
+
+    def test_get_worksheets_targeting_path_ignores_stale_hidden_ids(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {
+                "targeting": "path",
+                "path": "/book.xlsx",
+                "drive_id": "stale-drive-from-pick-mode",
+                "file_id": "stale-file-from-pick-mode",
+            },
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch(
+                "component.resolve_workbook", return_value=("drive-2", "file-2", False)
+            ) as mock_resolve_workbook,
+            mock.patch("component.list_worksheets_with_headers", return_value=[]),
+        ):
+            comp.get_worksheets()
+
+        resolved_workbook = mock_resolve_workbook.call_args.args[2]
+        assert resolved_workbook.path == "/book.xlsx"
+        assert resolved_workbook.drive_id is None
+        assert resolved_workbook.file_id is None
+
+    def test_create_worksheet_targeting_pick_requires_both_ids(self, tmp_path):
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"targeting": "pick", "drive_id": "drive-1"},
+            "worksheet": {"name": "Sheet1"},
+        }
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(UserException, match="Invalid workbook configuration"):
+            comp.create_worksheet()
+
+    def test_missing_targeting_still_enforces_the_humanized_legacy_xor_message(self, tmp_path):
+        # No `targeting` at all (row API payload/VCR cassette config predating Change B) keeps
+        # today's mutual-exclusivity check, just humanized (Change B).
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {"path": "/book.xlsx", "drive_id": "drive-1", "file_id": "file-1"},
+        }
+        comp = _build_component(tmp_path, parameters)
+
+        with pytest.raises(UserException, match="Choose one way to target the workbook"):
+            comp.list_worksheets()
+
+
 class TestBuildTokenProvider:
     def test_uses_common_authority_for_private_onedrive(self, tmp_path):
         parameters = {"account": {"account_type": "private_onedrive"}}
@@ -520,18 +607,57 @@ class TestRequireWorkbookPath:
         ):
             comp.create_workbook()
 
-    def test_invalid_workbook_combo_raises_validation_error_not_raw_path(self, tmp_path):
-        # `path` combined with `drive_id`/`file_id` is invalid per the `Workbook` model — this can
-        # only be caught once actual model validation runs (raw `.get("path")` would silently
-        # ignore the conflicting ids and let it through).
+    def test_stray_ids_alongside_a_valid_path_are_ignored_not_a_validation_error(self, tmp_path):
+        # Change D fix: `_require_workbook_path` now builds the partial `Workbook` model from
+        # `path` alone — `search`/`createWorkbook` only ever accept a path (no ids targeting,
+        # design spec §5, and this class's own docstring), so any `drive_id`/`file_id` sitting
+        # alongside a valid `path` (e.g. leftover from switching `workbook.targeting` back and
+        # forth in the row's Worksheet-mode form) is simply irrelevant here, not a conflict.
         parameters = {
             "account": {"account_type": "private_onedrive"},
             "workbook": {"path": "/book.xlsx", "drive_id": "drive-1", "file_id": "file-1"},
         }
         comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
 
-        with pytest.raises(UserException, match="Invalid workbook configuration"):
-            comp.create_workbook()
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.search_workbook", return_value=None) as mock_search_workbook,
+        ):
+            result = comp.search()
+
+        assert mock_search_workbook.call_args.args[2] == "/book.xlsx"
+        assert result == {"file": None}
+
+    def test_stale_hidden_ids_do_not_crash_when_targeting_is_pick(self, tmp_path):
+        # The bug Change D's fix actually prevents: before it, `_require_workbook_path` fed the
+        # *whole* `workbook_params` dict into `Workbook.model_validate`, which — for a row sitting
+        # in `targeting: "pick"` — silently clears `path` back to `None` (by design: pick mode
+        # ignores path entirely). The presence check above already passed on the raw, still-set
+        # `path`, so the post-validation `assert workbook.path is not None` would then blow up
+        # with an unhandled `AssertionError` (exit 2) instead of a clean result — even though
+        # `search`/`createWorkbook` were always documented as path-only and should never care
+        # about `targeting`/ids at all.
+        parameters = {
+            "account": {"account_type": "private_onedrive"},
+            "workbook": {
+                "targeting": "pick",
+                "path": "/stale-leftover.xlsx",
+                "drive_id": "drive-1",
+                "file_id": "file-1",
+            },
+        }
+        comp = _build_component(tmp_path, parameters)
+        fake_client = MagicMock()
+
+        with (
+            mock.patch("component.GraphClient", return_value=fake_client),
+            mock.patch("component.search_workbook", return_value=None) as mock_search_workbook,
+        ):
+            result = comp.search()  # must not raise (neither UserException nor AssertionError)
+
+        assert mock_search_workbook.call_args.args[2] == "/stale-leftover.xlsx"
+        assert result == {"file": None}
 
     def test_valid_path_is_returned_from_the_validated_model(self, tmp_path):
         parameters = {"account": {"account_type": "private_onedrive"}, "workbook": {"path": "/book.xlsx"}}

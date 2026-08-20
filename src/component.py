@@ -137,11 +137,11 @@ class Component(ComponentBase):
 
         Token persistence happens in ``finally`` so a rotated refresh token is never lost even
         when the run itself fails (design spec §2/§3 — rotation must survive a failed job).
-        ``drive_id`` is resolved lazily inside whichever mode branch actually needs it (file/CSV
-        mode only — Excel mode targets its own ``workbook.{path,drive_id,file_id}`` and never
-        calls :func:`~client.drives.resolve_drive_id` at all, phase 8 audit IMPORTANT-2): doing
-        it unconditionally here cost every Excel-mode SharePoint run two extra, unused Graph
-        calls that could fail a run whose real target is elsewhere.
+        ``drive_id`` is resolved lazily inside whichever mode branch actually needs it (mode
+        'file' only — mode 'worksheet' targets its own ``workbook.{path,drive_id,file_id}`` and
+        never calls :func:`~client.drives.resolve_drive_id` at all, phase 8 audit IMPORTANT-2):
+        doing it unconditionally here cost every worksheet-mode SharePoint run two extra, unused
+        Graph calls that could fail a run whose real target is elsewhere.
         """
         config = self._load_configuration()
         token_provider = self._build_token_provider(config.account)
@@ -419,16 +419,25 @@ class Component(ComponentBase):
         exact v1-parity ``missing_message`` below, rather than the generic "Invalid workbook
         configuration" one ``Workbook``'s own "requires either path or drive_id+file_id" validator
         would otherwise raise for an empty dict.
+
+        Only ``path`` itself is handed to :class:`~configuration.Workbook` (Change D
+        sync-action compatibility) — never the raw ``workbook_params`` dict wholesale. These two
+        actions are path-only regardless of the row's ``workbook.targeting`` (a row-schema-only
+        field these v1-parity actions don't otherwise care about): building the partial model
+        from ``path`` alone means a row sitting in ``targeting: "pick"`` (which would otherwise
+        make ``Workbook`` clear ``path`` to ``None`` — by design, ignoring exactly this kind of
+        stale value) can never turn a legitimate ``path`` into a confusing internal
+        ``AssertionError`` here.
         """
         workbook_params = self.configuration.parameters.get("workbook")
         if not isinstance(workbook_params, dict) or not workbook_params.get("path"):
             raise UserException(missing_message)
         try:
-            workbook = Workbook.model_validate(workbook_params)
+            workbook = Workbook.model_validate({"path": workbook_params["path"]})
         except ValidationError as e:
             raise UserException(f"Invalid workbook configuration: {_format_validation_error(e)}") from e
-        # The presence check above guarantees `workbook_params["path"]` was truthy, and `Workbook`
-        # never clears a supplied `path` during validation.
+        # The presence check above guarantees `workbook_params["path"]` was truthy, and building
+        # the model from `path` alone (see above) means it's never cleared during validation.
         assert workbook.path is not None
         return workbook.path
 
@@ -468,66 +477,95 @@ class Component(ComponentBase):
     def _dispatch_mode(self, config: RowConfig, client: GraphClient, now: datetime) -> None:
         if config.mode == Mode.FILE:
             self._run_file_mode(config, client, now)
-        elif config.mode == Mode.TABLE_CSV:
-            self._run_csv_mode(config, client, now)
         else:
-            self._run_excel_mode(config, client)
+            self._run_worksheet_mode(config, client)
 
     def _run_file_mode(self, config: RowConfig, client: GraphClient, now: datetime) -> None:
-        """Upload every file from the row's file input mapping (design spec §2/§6)."""
+        """Upload the row's file input mapping and write its table input mapping as CSV(s).
+
+        Mode 'file' processes *both* of the row's input mappings (Change A — merged from the
+        pre-merge 'file'/'table_csv' split): every file from the file input mapping is uploaded
+        as-is, and every table from the table input mapping is written as a
+        ``<table name>.csv`` (``csv`` options apply, ``csv.file_name`` only when exactly one table
+        is mapped — see :meth:`_upload_tables_as_csv`). At least one file or table is required;
+        zero of both is a configuration error, not a silent no-op run.
+        """
         files: list[FileDefinition] = self.get_input_files_definitions()
-        if not files:
+        tables: list[TableDefinition] = self.get_input_tables_definitions()
+        if not files and not tables:
             raise UserException(
-                "No files found in the input mapping. Add at least one file to this row's file "
-                "input mapping before running mode 'file'."
+                "No files or tables found in the input mapping. Add at least one file to this "
+                "row's file input mapping, or at least one table to its table input mapping, "
+                "before running mode 'file'."
             )
-        self._warn_ignored_table_input_mapping(Mode.FILE)
+        if len(tables) > 1 and config.csv.file_name:
+            raise UserException(
+                "csv.file_name can only be used when exactly one table is mapped to this row — "
+                f"it currently maps {len(tables)} tables. Leave csv.file_name empty (each table "
+                "is then uploaded as '<table name>.csv') or map a single table."
+            )
         drive_id = resolve_drive_id(client, config.account, config.destination.drive_id)
         parent_id, folder_path = self._resolve_destination_folder(config, client, drive_id, now)
         conflict_behavior = config.destination.conflict_behavior.value
+
         for file_def in files:
             upload_file(client, drive_id, parent_id, file_def.full_path, file_def.name, conflict_behavior)
             target_path = f"{folder_path}/{file_def.name}" if folder_path else file_def.name
             logger.info("Uploaded file '%s' to '%s'.", file_def.name, target_path)
 
-    def _run_csv_mode(self, config: RowConfig, client: GraphClient, now: datetime) -> None:
-        """Upload the row's single input table as a CSV file (design spec §2/§6)."""
-        table = self._require_single_input_table()
-        self._warn_ignored_file_input_mapping(Mode.TABLE_CSV)
-        drive_id = resolve_drive_id(client, config.account, config.destination.drive_id)
-        parent_id, folder_path = self._resolve_destination_folder(config, client, drive_id, now)
-        table_base_name = table.name.removesuffix(".csv")
-        file_name = config.csv.file_name or f"{table_base_name}.csv"
-        upload_path, is_temp_file = self._prepare_csv_upload_source(table, config.csv)
-        try:
-            conflict_behavior = config.destination.conflict_behavior.value
-            upload_file(client, drive_id, parent_id, upload_path, file_name, conflict_behavior)
-        finally:
-            if is_temp_file:
-                os.remove(upload_path)
-        target_path = f"{folder_path}/{file_name}" if folder_path else file_name
-        logger.info("Uploaded CSV file '%s' to '%s'.", file_name, target_path)
+        if tables:
+            self._upload_tables_as_csv(config, client, drive_id, parent_id, folder_path, tables, conflict_behavior)
 
-    def _run_excel_mode(self, config: RowConfig, client: GraphClient) -> None:
+    def _upload_tables_as_csv(
+        self,
+        config: RowConfig,
+        client: GraphClient,
+        drive_id: str,
+        parent_id: str,
+        folder_path: str,
+        tables: list[TableDefinition],
+        conflict_behavior: str,
+    ) -> None:
+        """Upload every table in ``tables`` as a CSV file (design spec §2/§6, Change A merge).
+
+        ``csv.file_name`` names the single uploaded file when exactly one table is mapped
+        (``_run_file_mode`` already rejected it being set for more than one); every other case —
+        no ``file_name`` set at all, or more than one table mapped — names each file
+        ``<table name>.csv``, one per table.
+        """
+        single_table = len(tables) == 1
+        for table in tables:
+            table_base_name = table.name.removesuffix(".csv")
+            file_name = (config.csv.file_name if single_table else None) or f"{table_base_name}.csv"
+            upload_path, is_temp_file = self._prepare_csv_upload_source(table, config.csv)
+            try:
+                upload_file(client, drive_id, parent_id, upload_path, file_name, conflict_behavior)
+            finally:
+                if is_temp_file:
+                    os.remove(upload_path)
+            target_path = f"{folder_path}/{file_name}" if folder_path else file_name
+            logger.info("Uploaded CSV file '%s' to '%s'.", file_name, target_path)
+
+    def _run_worksheet_mode(self, config: RowConfig, client: GraphClient) -> None:
         """Write the row's single input table into an Excel worksheet (design spec §5/§6).
 
-        Unlike file/CSV mode, Excel mode never resolves a drive id via
+        Unlike file mode, worksheet mode never resolves a drive id via
         :func:`~client.drives.resolve_drive_id` at all — ``destination.drive_id`` doesn't even
         apply here (phase 8 audit IMPORTANT-2: that call used to happen unconditionally in
-        ``run()``, costing every Excel-mode SharePoint run two unused Graph calls that could fail
-        a run whose real target is elsewhere). The target drive comes entirely from
+        ``run()``, costing every worksheet-mode SharePoint run two unused Graph calls that could
+        fail a run whose real target is elsewhere). The target drive comes entirely from
         ``workbook.{path,drive_id,file_id}``, resolved below via
         :func:`~client.excel_writer.resolve_workbook`.
         """
         if config.account.account_type == AccountType.PRIVATE_ONEDRIVE:
             raise UserException(
-                "Mode 'table_excel' is not supported for account_type 'private_onedrive': the "
+                "Mode 'worksheet' is not supported for account_type 'private_onedrive': the "
                 "Microsoft Graph Excel API is only available for OneDrive for Business and "
                 "SharePoint accounts."
             )
         table = self._require_single_input_table()
-        self._warn_ignored_file_input_mapping(Mode.TABLE_EXCEL)
-        # `RowConfig._validate_mode_requirements` guarantees both are set for mode 'table_excel'.
+        self._warn_ignored_file_input_mapping(Mode.WORKSHEET)
+        # `RowConfig._validate_mode_requirements` guarantees both are set for mode 'worksheet'.
         assert config.workbook is not None and config.worksheet is not None
 
         workbook_drive_id, workbook_file_id, workbook_created = resolve_workbook(
@@ -553,27 +591,14 @@ class Component(ComponentBase):
             return
         logger.info("Wrote table '%s' to the Excel worksheet.", table.name)
 
-    def _warn_ignored_table_input_mapping(self, mode: Mode) -> None:
-        """Warn once when mode 'file' is configured but the row also carries a table input mapping.
-
-        Mode 'file' only ever reads the file input mapping (:meth:`_run_file_mode`) — a non-empty
-        table input mapping is silently ignored otherwise, which is easy to misconfigure (e.g. a
-        row copied from a `table_csv` row that still has its old table mapping attached). A single
-        log line is cheap and catches the mistake without failing the run.
-        """
-        if self.get_input_tables_definitions():
-            logger.warning(
-                "Row mode is '%s': the table input mapping is ignored (only the file input "
-                "mapping is used).",
-                mode.value,
-            )
-
     def _warn_ignored_file_input_mapping(self, mode: Mode) -> None:
-        """Warn once when mode 'table_csv'/'table_excel' is configured but the row also carries a
-        file input mapping.
+        """Warn once when mode 'worksheet' is configured but the row also carries a file input
+        mapping.
 
-        Both table modes only ever read the (single) table input mapping (:meth:`_run_csv_mode`/
-        :meth:`_run_excel_mode`) — a non-empty file input mapping is silently ignored otherwise.
+        Mode 'worksheet' only ever reads the (single) table input mapping (:meth:`_run_worksheet_mode`)
+        — a non-empty file input mapping is silently ignored otherwise. Mode 'file' no longer needs
+        an equivalent "table input mapping ignored" warning (Change A): it now processes *both*
+        input mappings, so a table input mapping is never ignored there anymore.
         """
         if self.get_input_files_definitions():
             logger.warning(
@@ -587,7 +612,7 @@ class Component(ComponentBase):
     ) -> tuple[str, str]:
         """Resolve `destination.folder_path` (placeholders, validation) and ensure it exists.
 
-        Shared by file and CSV mode (design spec §5: `destination.folder_path` applies to both).
+        Used by mode 'file' only (design spec §5: `destination.folder_path` applies there).
         """
         business = config.account.account_type != AccountType.PRIVATE_ONEDRIVE
         folder_path = resolve_placeholders(config.destination.folder_path or "", now)
@@ -596,7 +621,7 @@ class Component(ComponentBase):
         return parent_id, folder_path
 
     def _require_single_input_table(self) -> TableDefinition:
-        """Exactly one input table is required for CSV/Excel modes (v1-parity messages)."""
+        """Exactly one input table is required for mode 'worksheet' (v1-parity messages)."""
         tables: list[TableDefinition] = self.get_input_tables_definitions()
         if not tables:
             raise UserException('No CSV file found in "/data/in/tables".')
@@ -611,7 +636,7 @@ class Component(ComponentBase):
         When the row's CSV options match Storage's own defaults, the input file is uploaded
         as-is (streamed, no rewrite). Otherwise it's rewritten to a `/tmp` file — never under
         `data/out/` (design spec §2 "Scratch files") — and the caller is responsible for
-        removing it once the upload finishes (see `_run_csv_mode`'s `finally`).
+        removing it once the upload finishes (see `_upload_tables_as_csv`'s `finally`).
         """
         if (
             csv_options.delimiter == _STORAGE_DEFAULT_DELIMITER

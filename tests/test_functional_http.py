@@ -413,24 +413,63 @@ class TestExcelEmptyCsvInput:
 
 
 class TestCsvCardinality:
+    """Mode 'worksheet' (the pre-merge 'table_excel') still requires exactly one input table —
+    unaffected by Change A's file-mode merge, which only touches mode 'file'."""
+
     def test_zero_tables_raises_v1_parity_user_exception(self, tmp_path):
-        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        parameters = {
+            "mode": "table_excel",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
         comp = _build_component(tmp_path, parameters, tables={})
         graph = GraphFake()
-        graph.add("GET", _graph_url("/me/drive"), FakeResponse(200, {"id": "drive-1"}))
 
         with pytest.raises(UserException, match=re.escape('No CSV file found in "/data/in/tables".')):
             _run(comp, graph)  # exit 1
+        assert graph.calls_for("GET") == []  # fails before any Graph call (no drive_id resolution either)
 
     def test_multiple_tables_raises_v1_parity_user_exception_naming_both(self, tmp_path):
-        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        parameters = {
+            "mode": "table_excel",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
         comp = _build_component(tmp_path, parameters, tables={"a.csv": "id\n1\n", "b.csv": "id\n2\n"})
         graph = GraphFake()
-        graph.add("GET", _graph_url("/me/drive"), FakeResponse(200, {"id": "drive-1"}))
         expected = re.escape('Expected one CSV file, found multiple: "a.csv", "b.csv".')
 
         with pytest.raises(UserException, match=expected):
             _run(comp, graph)  # exit 1
+
+
+class TestFileModeMergedTableInput:
+    """Change A: mode 'file' now processes both input mappings end-to-end (files uploaded as-is,
+    mapped tables written as CSV) — a real HTTP-mocked (not just mocked-collaborator) proof that
+    both actually reach Graph in the same run."""
+
+    def test_files_and_tables_together_are_both_uploaded(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(
+            tmp_path, parameters, files={"a.txt": b"aaa"}, tables={"mytable": "id,name\n1,a\n"}
+        )
+        graph = GraphFake()
+        graph.add("GET", _graph_url("/me/drive"), FakeResponse(200, {"id": "drive-1"}))
+        graph.add("GET", _graph_url("/drives/drive-1/root"), FakeResponse(200, {"id": "root-1"}))
+        graph.add("PUT", _graph_url("/drives/drive-1/items/root-1:/a.txt:/content"), FakeResponse(200, {"id": "item-1"}))
+        graph.add(
+            "PUT", _graph_url("/drives/drive-1/items/root-1:/mytable.csv:/content"), FakeResponse(200, {"id": "item-2"})
+        )
+
+        _run(comp, graph)  # must not raise: exit 0
+
+        put_urls = {url for url, _ in graph.calls_for("PUT")}
+        assert put_urls == {
+            _graph_url("/drives/drive-1/items/root-1:/a.txt:/content"),
+            _graph_url("/drives/drive-1/items/root-1:/mytable.csv:/content"),
+        }
 
 
 # ---------------------------------------------------------------------------------------------
