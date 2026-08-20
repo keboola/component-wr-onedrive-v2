@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+import dateparser
 from keboola.component.base import ComponentBase, sync_action
 from keboola.component.dao import FileDefinition, TableDefinition
 from keboola.component.exceptions import UserException
@@ -145,13 +146,33 @@ class Component(ComponentBase):
         config = self._load_configuration()
         token_provider = self._build_token_provider(config.account)
         client = GraphClient(token_provider=token_provider)
-        now = datetime.now(UTC)
+        now = self._resolve_now(config.destination.date)
         try:
             self._dispatch_mode(config, client, now)
         except _USER_FACING_ERRORS as exc:
             raise UserException(str(exc)) from exc
         finally:
             self._persist_token_state(token_provider)
+
+    def _resolve_now(self, destination_date: str | None) -> datetime:
+        """Resolve the timestamp fed into `folder_path`'s `{date:...}` placeholders.
+
+        Empty/unset ``destination.date`` preserves today's behavior: the job's own start time
+        (UTC). When set, it's resolved via ``dateparser`` — supporting both relative expressions
+        ("yesterday", "3 days ago", "last week") and absolute dates ("2026-01-31") — so a row
+        can target a folder other than "today"'s without the user having to compute the date
+        themselves. An unparseable value is a configuration error, not a crash.
+        """
+        if not destination_date:
+            return datetime.now(UTC)
+        resolved = dateparser.parse(destination_date, settings={"TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": True})
+        if resolved is None:
+            raise UserException(
+                f"destination.date value '{destination_date}' could not be parsed. Use a relative "
+                "expression (e.g. 'yesterday', '3 days ago', 'last week') or an absolute date "
+                "(e.g. '2026-01-31')."
+            )
+        return resolved
 
     @contextlib.contextmanager
     def _sync_action_client(self, account: Account) -> Iterator[GraphClient]:
@@ -460,6 +481,7 @@ class Component(ComponentBase):
                 "No files found in the input mapping. Add at least one file to this row's file "
                 "input mapping before running mode 'file'."
             )
+        self._warn_ignored_table_input_mapping(Mode.FILE)
         drive_id = resolve_drive_id(client, config.account, config.destination.drive_id)
         parent_id, folder_path = self._resolve_destination_folder(config, client, drive_id, now)
         conflict_behavior = config.destination.conflict_behavior.value
@@ -471,6 +493,7 @@ class Component(ComponentBase):
     def _run_csv_mode(self, config: RowConfig, client: GraphClient, now: datetime) -> None:
         """Upload the row's single input table as a CSV file (design spec §2/§6)."""
         table = self._require_single_input_table()
+        self._warn_ignored_file_input_mapping(Mode.TABLE_CSV)
         drive_id = resolve_drive_id(client, config.account, config.destination.drive_id)
         parent_id, folder_path = self._resolve_destination_folder(config, client, drive_id, now)
         table_base_name = table.name.removesuffix(".csv")
@@ -503,6 +526,7 @@ class Component(ComponentBase):
                 "SharePoint accounts."
             )
         table = self._require_single_input_table()
+        self._warn_ignored_file_input_mapping(Mode.TABLE_EXCEL)
         # `RowConfig._validate_mode_requirements` guarantees both are set for mode 'table_excel'.
         assert config.workbook is not None and config.worksheet is not None
 
@@ -528,6 +552,35 @@ class Component(ComponentBase):
             logger.warning('Ignored empty CSV file "%s".', table.name)
             return
         logger.info("Wrote table '%s' to the Excel worksheet.", table.name)
+
+    def _warn_ignored_table_input_mapping(self, mode: Mode) -> None:
+        """Warn once when mode 'file' is configured but the row also carries a table input mapping.
+
+        Mode 'file' only ever reads the file input mapping (:meth:`_run_file_mode`) — a non-empty
+        table input mapping is silently ignored otherwise, which is easy to misconfigure (e.g. a
+        row copied from a `table_csv` row that still has its old table mapping attached). A single
+        log line is cheap and catches the mistake without failing the run.
+        """
+        if self.get_input_tables_definitions():
+            logger.warning(
+                "Row mode is '%s': the table input mapping is ignored (only the file input "
+                "mapping is used).",
+                mode.value,
+            )
+
+    def _warn_ignored_file_input_mapping(self, mode: Mode) -> None:
+        """Warn once when mode 'table_csv'/'table_excel' is configured but the row also carries a
+        file input mapping.
+
+        Both table modes only ever read the (single) table input mapping (:meth:`_run_csv_mode`/
+        :meth:`_run_excel_mode`) — a non-empty file input mapping is silently ignored otherwise.
+        """
+        if self.get_input_files_definitions():
+            logger.warning(
+                "Row mode is '%s': the file input mapping is ignored (only the table input "
+                "mapping is used).",
+                mode.value,
+            )
 
     def _resolve_destination_folder(
         self, config: RowConfig, client: GraphClient, drive_id: str, now: datetime

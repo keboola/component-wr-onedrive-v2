@@ -68,18 +68,26 @@ The configuration has two levels:
 Destination (file / table_csv modes)
 -------------------------------------
 
-- **Document Library** (`destination.drive_id`) — the target document library (drive) on a
-  SharePoint site, selected from the "List Libraries" dropdown. Leave empty to use the
-  site's/account's default library. Not applicable to Private OneDrive or OneDrive for Business
-  accounts.
+- **Document Library** (`destination.drive_id`) — the target document library (drive), selected
+  from the "List Libraries" dropdown. Applies to every account type when set (drives are globally
+  addressable in Microsoft Graph); leave empty to use the account's/site's default document
+  library. The UI only shows this field for SharePoint accounts (Private OneDrive/OneDrive for
+  Business have a single default drive), but any already-configured value is still honored
+  verbatim for every account type.
 - **Folder Path** (`destination.folder_path`) — path inside the library, relative to the library
-  root. Missing folders are created automatically. Supports `strftime`-style date placeholders
-  resolved at run start (UTC), for example:
+  root. Missing folders are created automatically. Supports `strftime`-style date placeholders,
+  for example:
 
   ```
   reports/{date:%Y-%m-%d}
   ```
 
+  Resolved against the job's start time (UTC) by default, or against **Date** (`destination.date`,
+  below) when set.
+- **Date** (`destination.date`) — the date used to resolve `folder_path`'s `{date:...}`
+  placeholders, parsed via [`dateparser`](https://github.com/scrapinghub/dateparser). Accepts a
+  relative expression (`yesterday`, `3 days ago`, `last week`) or an absolute date
+  (`2026-01-31`). Leave empty to default to the job's start date (UTC).
 - **Conflict Behavior** (`destination.conflict_behavior`) — what happens when a file with the same
   name already exists at the destination: `fail` (default — stop with an error), `replace`
   (overwrite it), or `rename` (upload under a new, non-colliding name).

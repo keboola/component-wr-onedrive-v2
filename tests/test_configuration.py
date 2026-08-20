@@ -60,11 +60,39 @@ class TestDestination:
         destination = Destination()
         assert destination.drive_id is None
         assert destination.folder_path is None
+        assert destination.date is None
         assert destination.conflict_behavior == ConflictBehavior.FAIL
 
     def test_invalid_conflict_behavior_raises(self):
         with pytest.raises(ValidationError):
             Destination(conflict_behavior="overwrite")
+
+    def test_date_accepts_a_free_form_string(self):
+        destination = Destination(date="yesterday")
+        assert destination.date == "yesterday"
+
+    def test_ui_shaped_payload_with_blank_untouched_fields_normalizes_to_defaults(self):
+        # The Keboola UI submits an untouched text/select field as "" — including
+        # `conflict_behavior`, whose declared default ("fail") must still apply rather than
+        # failing enum validation on the empty string.
+        destination = Destination.model_validate(
+            {"drive_id": "", "folder_path": "", "date": "", "conflict_behavior": ""}
+        )
+        assert destination.drive_id is None
+        assert destination.folder_path is None
+        assert destination.date is None
+        assert destination.conflict_behavior == ConflictBehavior.FAIL
+
+    def test_row_schema_helper_account_type_field_is_ignored(self):
+        # `configRowSchema.json`'s hidden `destination.helper_account_type` (root-watch UX
+        # addition — gates the Document Library dropdown to SharePoint accounts in the UI) is
+        # submitted alongside the real fields; `Destination`'s `extra="ignore"` must tolerate it.
+        destination = Destination.model_validate(
+            {"helper_account_type": "sharepoint", "drive_id": "drive-1", "folder_path": "reports"}
+        )
+        assert destination.drive_id == "drive-1"
+        assert destination.folder_path == "reports"
+        assert not hasattr(destination, "helper_account_type")
 
 
 class TestCsvOptions:
@@ -110,6 +138,19 @@ class TestWorkbook:
         workbook = Workbook(path="/book.xlsx")
         assert workbook.metadata is None
 
+    def test_ui_shaped_payload_with_blank_untouched_path_resolves_to_ids_mode(self):
+        # The Keboola UI submits an untouched text field as "" (not omitted, not null) — a row
+        # edited to pick Library + Workbook from the dropdowns still carries the Path field's
+        # placeholder value verbatim.
+        workbook = Workbook.model_validate({"path": "", "drive_id": "b!drive-id", "file_id": "01file-id"})
+        assert workbook.path is None
+        assert workbook.drive_id == "b!drive-id"
+        assert workbook.file_id == "01file-id"
+
+    def test_blank_path_alone_is_still_invalid(self):
+        with pytest.raises(ValidationError, match="requires either workbook.path"):
+            Workbook.model_validate({"path": "  "})
+
 
 class TestWorksheet:
     def test_id_only_is_valid(self):
@@ -154,6 +195,18 @@ class TestWorksheet:
     def test_metadata_is_accepted_and_passed_through(self):
         worksheet = Worksheet(name="Sheet1", metadata={"pickerId": "abc"})
         assert worksheet.metadata == {"pickerId": "abc"}
+
+    def test_ui_shaped_payload_with_blank_untouched_id_and_position_resolves_to_name_mode(self):
+        # A row edited via the UI to target a worksheet by name still carries the ID/Position
+        # fields' untouched "" placeholder values.
+        worksheet = Worksheet.model_validate({"name": "X", "id": "", "position": ""})
+        assert worksheet.name == "X"
+        assert worksheet.id is None
+        assert worksheet.position is None
+
+    def test_blank_id_and_position_alone_is_still_invalid(self):
+        with pytest.raises(ValidationError, match="at least one of id, name, or position"):
+            Worksheet.model_validate({"id": "", "position": "", "name": ""})
 
 
 class TestRowConfig:

@@ -61,3 +61,52 @@ class TestSchemaSyncActionsExist:
         # The three UX-addition actions this test module was written to guard against regressing.
         actions = set(_schema_actions("configRowSchema.json"))
         assert {"listLibraries", "listWorkbooks", "listWorksheets"} <= actions
+
+
+class TestRowSchemaJsonValidity:
+    """Change 2/3 UX additions: `configRowSchema.json` stays syntactically valid JSON and the new
+    `destination.date` field / reworded `mode` description are present with the expected shape."""
+
+    def _row_schema(self) -> dict:
+        return json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+
+    def test_row_schema_is_valid_json(self):
+        # `.read_text()` + `json.loads` above already raises on malformed JSON; this test exists
+        # so a parse failure reports here with a clear name instead of only inside some other
+        # test's setup.
+        assert self._row_schema()["type"] == "object"
+
+    def test_mode_description_reads_as_a_how_not_a_what(self):
+        mode = self._row_schema()["properties"]["mode"]
+        assert mode["description"] == (
+            "How this row writes data to OneDrive/SharePoint — upload files as-is, write a table "
+            "as CSV, or write a table into an Excel worksheet."
+        )
+
+    def test_destination_date_field_is_present_between_folder_path_and_conflict_behavior(self):
+        destination_properties = self._row_schema()["properties"]["destination"]["properties"]
+        assert "date" in destination_properties
+        date_field = destination_properties["date"]
+        assert date_field["title"] == "Date"
+        assert date_field["propertyOrder"] > destination_properties["folder_path"]["propertyOrder"]
+        assert date_field["propertyOrder"] < destination_properties["conflict_behavior"]["propertyOrder"]
+
+
+class TestRowSchemaHelperAccountType:
+    """Change 6 UX addition: a hidden `destination.helper_account_type` mirrors the root config's
+    `account.account_type` (root-watch pattern, keboola.ex-delta-lake precedent) so
+    `destination.drive_id` can be shown only for SharePoint accounts — a row schema cannot
+    reference the root config's fields directly in `options.dependencies`."""
+
+    def _destination_properties(self) -> dict:
+        schema = json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+        return schema["properties"]["destination"]["properties"]
+
+    def test_helper_field_watches_the_root_account_type(self):
+        helper = self._destination_properties()["helper_account_type"]
+        assert helper["watch"] == {"val": "_metadata_.root.parameters.account.account_type"}
+        assert helper["options"]["hidden"] is True
+
+    def test_drive_id_depends_on_the_helper_being_sharepoint(self):
+        drive_id = self._destination_properties()["drive_id"]
+        assert drive_id["options"]["dependencies"] == {"helper_account_type": "sharepoint"}

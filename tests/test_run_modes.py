@@ -12,9 +12,11 @@ import json
 import os
 import re
 import tempfile
+from datetime import UTC, datetime
 from unittest import mock
 from unittest.mock import MagicMock
 
+import dateparser
 import pytest
 from freezegun import freeze_time
 from keboola.component.exceptions import UserException
@@ -143,6 +145,196 @@ class TestFileMode:
             pytest.raises(UserException, match="No files found in the input mapping"),
         ):
             comp.run()
+
+
+class TestResolveNow:
+    """`Component._resolve_now` (Change 2 UX addition): resolves the timestamp fed into
+    `folder_path`'s `{date:...}` placeholders — job start (UTC) by default, or `destination.date`
+    via `dateparser` when set."""
+
+    @freeze_time("2026-08-17 12:34:56")
+    def test_none_returns_job_start_utc(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        now = comp._resolve_now(None)
+
+        assert now == datetime(2026, 8, 17, 12, 34, 56, tzinfo=UTC)
+
+    @freeze_time("2026-08-17 12:34:56")
+    def test_blank_string_returns_job_start_utc(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        now = comp._resolve_now("")
+
+        assert now == datetime(2026, 8, 17, 12, 34, 56, tzinfo=UTC)
+
+    def test_absolute_date_is_parsed_exactly(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        now = comp._resolve_now("2026-01-31")
+
+        assert now == datetime(2026, 1, 31, tzinfo=UTC)
+
+    @pytest.mark.parametrize("value", ["yesterday", "3 days ago", "last week"])
+    def test_relative_date_matches_dateparsers_own_output(self, tmp_path, value):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+        expected = dateparser.parse(value, settings={"TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": True})
+
+        now = comp._resolve_now(value)
+
+        # No frozen clock (per the design note: compare against dateparser's own output) — allow a
+        # small slop for the two `dateparser.parse` calls landing a few seconds apart.
+        assert abs((now - expected).total_seconds()) < 5
+
+    def test_unparseable_value_raises_user_exception_naming_the_value_and_examples(self, tmp_path):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        with pytest.raises(UserException) as exc_info:
+            comp._resolve_now("not-a-real-date-xyz123")
+
+        message = str(exc_info.value)
+        assert "not-a-real-date-xyz123" in message
+        assert "yesterday" in message
+
+
+class TestDestinationDateFolderPath:
+    """End-to-end: `destination.date` feeds `resolve_placeholders` via `_resolve_now`, in place
+    of the job's own start time, for both file and CSV mode."""
+
+    def test_relative_date_resolves_the_folder_path_placeholder(self, tmp_path):
+        parameters = {
+            "mode": "file",
+            "account": {"account_type": "private_onedrive"},
+            "destination": {"folder_path": "reports/{date:%Y-%m-%d}", "date": "yesterday"},
+        }
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+        expected_date = dateparser.parse("yesterday", settings={"TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": True})
+        expected_path = f"reports/{expected_date:%Y-%m-%d}"
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="parent-1") as mock_ensure_folder,
+            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+        ):
+            comp.run()
+
+        mock_ensure_folder.assert_called_once_with(mock.ANY, "drive-1", expected_path)
+
+    def test_empty_destination_date_keeps_job_start_behavior(self, tmp_path):
+        parameters = {
+            "mode": "table_csv",
+            "account": {"account_type": "private_onedrive"},
+            "destination": {"folder_path": "reports/{date:%Y-%m-%d}"},
+        }
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id\n1\n"})
+
+        with (
+            freeze_time("2026-08-17"),
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="parent-1") as mock_ensure_folder,
+            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+        ):
+            comp.run()
+
+        mock_ensure_folder.assert_called_once_with(mock.ANY, "drive-1", "reports/2026-08-17")
+
+    def test_invalid_destination_date_raises_user_exception(self, tmp_path):
+        parameters = {
+            "mode": "file",
+            "account": {"account_type": "private_onedrive"},
+            "destination": {"folder_path": "reports", "date": "not-a-real-date-xyz123"},
+        }
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            pytest.raises(UserException, match="not-a-real-date-xyz123"),
+        ):
+            comp.run()
+
+
+class TestIgnoredInputWarnings:
+    """Change 4: a one-line warning when a row's *other* input mapping is non-empty but unused
+    by the configured mode — e.g. a row copied from a `table_csv` row that still carries its old
+    table mapping when switched to mode `file`."""
+
+    def test_file_mode_warns_when_table_input_mapping_is_also_present(self, tmp_path, caplog):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(
+            tmp_path, parameters, files={"a.txt": b"aaa"}, tables={"ignored": "id\n1\n"}
+        )
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+            caplog.at_level("WARNING"),
+        ):
+            comp.run()
+
+        assert any("table input mapping is ignored" in message for message in caplog.messages)
+
+    def test_file_mode_no_warning_when_table_input_mapping_is_empty(self, tmp_path, caplog):
+        parameters = {"mode": "file", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, files={"a.txt": b"aaa"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+            caplog.at_level("WARNING"),
+        ):
+            comp.run()
+
+        assert not any("table input mapping is ignored" in message for message in caplog.messages)
+
+    def test_csv_mode_warns_when_file_input_mapping_is_also_present(self, tmp_path, caplog):
+        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(
+            tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"}, files={"ignored.txt": b"x"}
+        )
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+            caplog.at_level("WARNING"),
+        ):
+            comp.run()
+
+        assert any("file input mapping is ignored" in message for message in caplog.messages)
+
+    def test_csv_mode_no_warning_when_file_input_mapping_is_empty(self, tmp_path, caplog):
+        parameters = {"mode": "table_csv", "account": {"account_type": "private_onedrive"}, "destination": {}}
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}),
+            caplog.at_level("WARNING"),
+        ):
+            comp.run()
+
+        assert not any("file input mapping is ignored" in message for message in caplog.messages)
 
 
 class TestCsvModeCardinality:
@@ -423,6 +615,32 @@ class TestExcelMode:
         assert write_args.kwargs["batch_size"] == 1234
         assert write_args.kwargs["is_new_sheet"] is False
         assert write_args.kwargs["session"] == "session-1"
+
+    def test_warns_when_file_input_mapping_is_also_present(self, tmp_path, caplog):
+        parameters = {
+            "mode": "table_excel",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
+        comp = _build_component(
+            tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"}, files={"ignored.txt": b"x"}
+        )
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id") as mock_resolve_drive_id,
+            mock.patch("component.resolve_workbook", return_value=("wb-drive", "wb-file", False)),
+            mock.patch("component.workbook_session", return_value=_fake_session_context_manager("session-1")),
+            mock.patch("component.resolve_worksheet", return_value=("sheet-1", False, "Sheet1")),
+            mock.patch("component.write_table", return_value=True),
+            caplog.at_level("WARNING"),
+        ):
+            comp.run()
+
+        assert any("file input mapping is ignored" in message for message in caplog.messages)
+        mock_resolve_drive_id.assert_not_called()
 
 
 class TestErrorMapping:

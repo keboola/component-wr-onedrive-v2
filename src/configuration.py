@@ -11,6 +11,27 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def _pop_blank_strings(data: Any, fields: tuple[str, ...]) -> Any:
+    """Normalize the Keboola UI's untouched-text-field convention: a field the user never typed
+    into is submitted as ``""``, not omitted entirely and not ``null``. Popping a blank/
+    whitespace-only string among ``fields`` lets the field's own default apply — ``None`` for a
+    genuinely optional field, or the field's declared default otherwise (e.g.
+    ``Destination.conflict_behavior``) — exactly as if the key had never been sent.
+
+    Without this, a UI-submitted row like ``{"path": "", "drive_id": "b!...", "file_id": "01..."}``
+    (path untouched, ids picked via the dropdowns) would fail :class:`Workbook`'s "path cannot be
+    combined with drive_id/file_id" mutual-exclusivity check, since an empty string still counts
+    as "the user set this field" under a naive ``is not None`` presence check.
+    """
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    for field in fields:
+        if isinstance(normalized.get(field), str) and not normalized[field].strip():
+            del normalized[field]
+    return normalized
+
+
 class AccountType(StrEnum):
     """OneDrive/SharePoint account kind — drives both UI visibility and API dispatch."""
 
@@ -66,7 +87,17 @@ class Destination(BaseModel):
 
     drive_id: str | None = None
     folder_path: str | None = None
+    # A relative ("yesterday", "3 days ago") or absolute ("2026-01-31") date, resolved via
+    # `dateparser` (component.py's `_resolve_now`) and fed into `folder_path`'s
+    # `{date:<strftime-format>}` placeholders in place of the job's own start time. Empty/unset
+    # preserves today's behavior (job start, UTC).
+    date: str | None = None
     conflict_behavior: ConflictBehavior = ConflictBehavior.FAIL
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_blank_strings(cls, data: Any) -> Any:
+        return _pop_blank_strings(data, ("drive_id", "folder_path", "date", "conflict_behavior"))
 
 
 class CsvOptions(BaseModel):
@@ -94,6 +125,11 @@ class Workbook(BaseModel):
     file_id: str | None = None
     path: str | None = None
     metadata: Any | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_blank_strings(cls, data: Any) -> Any:
+        return _pop_blank_strings(data, ("path", "drive_id", "file_id"))
 
     @model_validator(mode="after")
     def _validate_target(self) -> Self:
@@ -133,7 +169,13 @@ class Worksheet(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_position(cls, data: Any) -> Any:
+    def _normalize_inputs(cls, data: Any) -> Any:
+        """Pop blank ``id``/``name``/``position`` strings (UI untouched-field convention), then
+        coerce a still-present numeric-string ``position`` to ``int`` (v1 configs hold both string
+        and int forms). Blank-popping must run first: an empty ``position`` string must become
+        ``None``, not be handed to ``int("")`` and crash.
+        """
+        data = _pop_blank_strings(data, ("id", "name", "position"))
         if isinstance(data, dict) and isinstance(data.get("position"), str):
             raw = data["position"]
             try:

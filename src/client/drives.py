@@ -64,23 +64,25 @@ def list_drives(client: GraphClient, site_id: str) -> list[dict[str, Any]]:
 def resolve_drive_id(client: GraphClient, account: Account, destination_drive_id: str | None = None) -> str:
     """Resolve the concrete drive id later tasks address as ``/drives/{drive_id}/...``.
 
-    Dispatch per account type (design spec §3):
+    Drives are globally addressable in Graph (``/drives/{drive-id}/...`` works regardless of
+    which account "owns" them), so ``destination_drive_id`` — the row's ``listLibraries``-picked
+    document library — is honored verbatim for **every** account type when it's set, not just
+    ``sharepoint``. Only when it's empty does this fall back to the per-account-type default
+    (design spec §3):
 
     - ``private_onedrive`` / ``onedrive_for_business``: the user's own default drive
       (``GET /me/drive``).
-    - ``sharepoint``: the row's selected library (``destination_drive_id``, chosen via the
-      ``listLibraries`` sync action) when configured, otherwise the site's default document
-      library (``GET /sites/{site_id}/drive``).
+    - ``sharepoint``: the site's default document library (``GET /sites/{site_id}/drive``).
 
     Always returns a concrete drive id — never a bare ``/me/drive``-style path — so the uploader
     and Excel writer (later tasks) can address every account type identically via
     ``/drives/{drive_id}/...``.
     """
-    if account.account_type in (AccountType.PRIVATE_ONEDRIVE, AccountType.ONEDRIVE_FOR_BUSINESS):
-        return client.get("/me/drive").json()["id"]
-
     if destination_drive_id:
         return destination_drive_id
+
+    if account.account_type in (AccountType.PRIVATE_ONEDRIVE, AccountType.ONEDRIVE_FOR_BUSINESS):
+        return client.get("/me/drive").json()["id"]
 
     site_id = get_site_id(client, account.site_url)
     return client.get(f"/sites/{site_id}/drive").json()["id"]

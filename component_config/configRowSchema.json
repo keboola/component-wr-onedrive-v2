@@ -8,7 +8,7 @@
     "mode": {
       "type": "string",
       "title": "Output Mode",
-      "description": "What this row writes to OneDrive/SharePoint",
+      "description": "How this row writes data to OneDrive/SharePoint — upload files as-is, write a table as CSV, or write a table into an Excel worksheet.",
       "enum": [
         "file",
         "table_csv",
@@ -38,18 +38,34 @@
         }
       },
       "properties": {
+        "helper_account_type": {
+          "type": "string",
+          "title": "Helper Account Type",
+          "description": "Hidden helper: mirrors the root configuration's account.account_type so sibling fields below can depend on it (a row schema cannot reference the root config directly).",
+          "template": "{{val}}",
+          "watch": {
+            "val": "_metadata_.root.parameters.account.account_type"
+          },
+          "options": {
+            "hidden": true
+          },
+          "propertyOrder": 0
+        },
         "drive_id": {
           "type": "string",
           "title": "Document Library",
           "format": "select",
           "enum": [],
-          "description": "Target document library (drive) for SharePoint sites",
+          "description": "Target document library (drive) for the upload",
           "options": {
-            "tooltip": "Only applies to SharePoint accounts with more than one library. Leave empty to use the site's/account's default library; ignored for Private OneDrive and OneDrive for Business accounts.",
+            "tooltip": "Only applies to SharePoint accounts with more than one library. Leave empty to use the site's default document library.",
             "async": {
               "label": "List Libraries",
               "action": "listLibraries",
               "autoload": true
+            },
+            "dependencies": {
+              "helper_account_type": "sharepoint"
             }
           },
           "propertyOrder": 1
@@ -59,9 +75,18 @@
           "title": "Folder Path",
           "description": "Folder inside the library; missing folders are created automatically",
           "options": {
-            "tooltip": "Relative to the library root. Supports strftime-style date placeholders resolved at run start (UTC), for example reports/{date:%Y-%m-%d}."
+            "tooltip": "Relative to the library root. Supports strftime-style date placeholders, e.g. reports/{date:%Y-%m-%d} — resolved at run start (UTC) by default, or use the Date field below (e.g. set Date to 'yesterday') to write into a different day's folder."
           },
           "propertyOrder": 2
+        },
+        "date": {
+          "type": "string",
+          "title": "Date",
+          "description": "Date used by the {date:...} placeholders in Folder Path",
+          "options": {
+            "tooltip": "Accepts a relative expression (yesterday, 3 days ago, last week) or an absolute date (2026-01-31). Leave empty to default to the job's start date (UTC)."
+          },
+          "propertyOrder": 3
         },
         "conflict_behavior": {
           "type": "string",
@@ -80,7 +105,7 @@
             ]
           },
           "default": "fail",
-          "propertyOrder": 3
+          "propertyOrder": 4
         }
       }
     },

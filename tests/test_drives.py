@@ -83,14 +83,27 @@ class TestListDrives:
 
 class TestResolveDriveId:
     @pytest.mark.parametrize("account_type", [AccountType.PRIVATE_ONEDRIVE, AccountType.ONEDRIVE_FOR_BUSINESS])
-    def test_personal_and_business_accounts_resolve_via_me_drive(self, account_type):
+    def test_personal_and_business_accounts_without_configured_drive_id_resolve_via_me_drive(self, account_type):
         client = _client_with_get(return_value={"id": "my-drive-id"})
         account = Account(account_type=account_type, tenant_id="tenant-1")
 
-        drive_id = resolve_drive_id(client, account, destination_drive_id="ignored-for-non-sharepoint")
+        drive_id = resolve_drive_id(client, account, destination_drive_id=None)
 
         client.get.assert_called_once_with("/me/drive")
         assert drive_id == "my-drive-id"
+
+    @pytest.mark.parametrize("account_type", [AccountType.PRIVATE_ONEDRIVE, AccountType.ONEDRIVE_FOR_BUSINESS])
+    def test_personal_and_business_accounts_with_configured_drive_id_use_it_verbatim(self, account_type):
+        # Drives are globally addressable in Graph — a configured `destination.drive_id` is now
+        # honored for every account type, not just `sharepoint`, and never triggers a `/me/drive`
+        # lookup.
+        client = MagicMock()
+        account = Account(account_type=account_type, tenant_id="tenant-1")
+
+        drive_id = resolve_drive_id(client, account, destination_drive_id="drive-configured")
+
+        assert drive_id == "drive-configured"
+        client.get.assert_not_called()
 
     def test_sharepoint_with_configured_drive_id_makes_no_network_call(self):
         client = MagicMock()
