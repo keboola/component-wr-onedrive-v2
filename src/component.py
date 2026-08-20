@@ -48,8 +48,10 @@ from client.exceptions import (
     InvalidPathError,
     InvalidWorkbookFormatError,
     InvalidWorkbookPathError,
+    KeyColumnNotFoundError,
     MultipleSitesFoundError,
     UploadSessionError,
+    UpsertRangeTooLargeError,
     WorkbookNotFoundError,
     WorksheetNotFoundError,
 )
@@ -114,7 +116,9 @@ _USER_FACING_ERRORS = (
     UploadSessionError,
     InvalidWorkbookPathError,
     InvalidWorkbookFormatError,
+    KeyColumnNotFoundError,
     MultipleSitesFoundError,
+    UpsertRangeTooLargeError,
     WorkbookNotFoundError,
     WorksheetNotFoundError,
 )
@@ -514,7 +518,7 @@ class Component(ComponentBase):
             logger.info("Uploaded file '%s' to '%s'.", file_def.name, target_path)
 
         if tables:
-            self._upload_tables_as_csv(config, client, drive_id, parent_id, folder_path, tables, conflict_behavior)
+            self._upload_tables_as_csv(config, client, drive_id, parent_id, folder_path, tables, conflict_behavior, now)
 
     def _upload_tables_as_csv(
         self,
@@ -525,18 +529,24 @@ class Component(ComponentBase):
         folder_path: str,
         tables: list[TableDefinition],
         conflict_behavior: str,
+        now: datetime,
     ) -> None:
         """Upload every table in ``tables`` as a CSV file (design spec §2/§6, Change A merge).
 
         ``csv.file_name`` names the single uploaded file when exactly one table is mapped
         (``_run_file_mode`` already rejected it being set for more than one); every other case —
         no ``file_name`` set at all, or more than one table mapped — names each file
-        ``<table name>.csv``, one per table.
+        ``<table name>.csv``, one per table. ``csv.file_name`` supports the same ``{{date}}``/
+        legacy ``{date:<strftime-format>}`` placeholders ``destination.folder_path`` does (Change
+        1), resolved against the same ``now`` so a file name and its folder never disagree about
+        which day's run they belong to.
         """
         single_table = len(tables) == 1
         for table in tables:
             table_base_name = table.name.removesuffix(".csv")
-            file_name = (config.csv.file_name if single_table else None) or f"{table_base_name}.csv"
+            file_name_template = config.csv.file_name if single_table else None
+            resolved_file_name = resolve_placeholders(file_name_template, now) if file_name_template else None
+            file_name = resolved_file_name or f"{table_base_name}.csv"
             upload_path, is_temp_file = self._prepare_csv_upload_source(table, config.csv)
             try:
                 upload_file(client, drive_id, parent_id, upload_path, file_name, conflict_behavior)
@@ -581,7 +591,8 @@ class Component(ComponentBase):
                 workbook_file_id,
                 worksheet_id,
                 table.full_path,
-                append=config.append,
+                write_mode=config.write_mode,
+                key_columns=config.key_columns,
                 batch_size=config.batch_size,
                 is_new_sheet=workbook_created or worksheet_created,
                 session=session,

@@ -16,9 +16,10 @@ Three concerns live here, as module-level functions taking an injected
   ``createSession``/``closeSession`` dance, with 202-polling and a sessionless fallback (Graph
   guarantees persistence either way; a session is a performance optimization only).
 - **Worksheet resolution + write** (:func:`resolve_worksheet`, :func:`write_table`) — finds/
-  creates/renames the target sheet, then streams a CSV into it in batched ``range`` PATCHes,
+  creates/renames the target sheet, then writes a CSV into it in batched ``range`` PATCHes,
   reproducing v1's overwrite (clear + write from A1) and append (usedRange-offset, header-skip)
-  semantics.
+  semantics, plus a third, non-v1 ``write_mode``: upsert (key-column matching, in-place row
+  updates — see :func:`_write_upsert`).
 
 Callers (plan Task 8's Excel-mode ``run()`` wiring) are expected to: call
 :func:`resolve_workbook` once, open :func:`workbook_session` around the rest of the row, call
@@ -44,14 +45,16 @@ from client.exceptions import (
     GraphNotFoundError,
     InvalidWorkbookFormatError,
     InvalidWorkbookPathError,
+    KeyColumnNotFoundError,
     MultipleSitesFoundError,
+    UpsertRangeTooLargeError,
     WorkbookNotFoundError,
     WorksheetNotFoundError,
 )
 from client.graph_client import GraphClient
 from client.headers import normalize_header_row
 from client.uploader import encode_path_segments, ensure_folder, upload_file, validate_path
-from configuration import Account, AccountType, Workbook, Worksheet
+from configuration import Account, AccountType, Workbook, Worksheet, WriteMode
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +99,18 @@ _ROOT_PATH_RE = re.compile(r"^/(.+)$")
 
 # A single spreadsheet cell address, e.g. "C9" -> column "C", row 9.
 _CELL_ADDRESS_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
+
+# `write_mode='upsert'` guardrail: above this many cells in the existing used range, refuse the
+# combined `usedRange` read up front rather than attempting it — well below Graph's own hard
+# 5,000,000-cell read limit, but already impractical to hold in memory and diff row-by-row for a
+# component that's meant to run unattended. 'overwrite'/'append' never read the existing sheet's
+# values at all, so they remain the escape hatch a oversized-sheet row should fall back to.
+_UPSERT_MAX_EXISTING_CELLS = 500_000
+
+# Joins composite key column values into one lookup string (`_build_key_columns_index`). A NUL
+# byte never appears in a CSV cell value, so this can't collide with a genuine multi-column key
+# that happens to contain the separator itself.
+_KEY_SEPARATOR = "\x00"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -653,7 +668,8 @@ def write_table(
     worksheet_id: str,
     csv_path: str,
     *,
-    append: bool,
+    write_mode: WriteMode,
+    key_columns: list[str] | None = None,
     batch_size: int,
     is_new_sheet: bool,
     session: str | None,
@@ -661,23 +677,32 @@ def write_table(
     """Stream ``csv_path`` into the worksheet, batched ``batch_size`` rows per ``range`` PATCH.
 
     Returns ``False`` (touching nothing on the sheet) when ``csv_path`` has no header row at all
-    (a completely empty CSV) — the caller (plan Task 8) logs
-    ``Ignored empty CSV file "<name>".`` and exits 0, v1 parity. Returns ``True`` otherwise.
+    (a completely empty CSV) — the caller logs ``Ignored empty CSV file "<name>".`` and exits 0,
+    v1 parity. Returns ``True`` otherwise.
 
-    Overwrite (``append=False``): clears the whole sheet first (unless it was just created, in
-    which case there's nothing to clear) and writes from A1, header included. Append: offsets
-    from the sheet's ``usedRange`` — an existing non-empty header means the CSV's own header row
-    is skipped (with a warning if the two headers differ, v1 parity — the warning is informational
-    only, it never blocks the append); an empty sheet (including a freshly created one) writes
-    the header too, same as overwrite.
+    ``write_mode='overwrite'``: clears the whole sheet first (unless it was just created, in
+    which case there's nothing to clear) and writes from A1, header included.
 
-    The column count is fixed from the CSV's header for every batch (short rows padded with
-    empty strings, long rows truncated) — Excel's range PATCH requires a rectangular ``values``
-    array. Any cell whose value starts with ``=`` is prefixed with ``'`` (v1 parity — formula
-    injection safety; Excel treats a leading ``'`` as "force literal text").
+    ``write_mode='append'``: offsets from the sheet's ``usedRange`` — an existing non-empty
+    header means the CSV's own header row is skipped (with a warning if the two headers differ,
+    v1 parity — the warning is informational only, it never blocks the append); an empty sheet
+    (including a freshly created one) writes the header too, same as overwrite.
+
+    ``write_mode='upsert'``: matches existing rows to CSV rows by ``key_columns`` (required
+    non-empty — enforced by ``configuration.RowConfig``, not re-checked here) and updates them in
+    place, appending everything else after the last used row; see :func:`_write_upsert` for the
+    algorithm. An empty (or freshly created) sheet behaves like ``overwrite``.
+
+    For ``overwrite``/``append``, the column count is fixed from the CSV's header for every batch
+    (short rows padded with empty strings, long rows truncated) — Excel's range PATCH requires a
+    rectangular ``values`` array. Any cell whose value starts with ``=`` is prefixed with ``'``
+    (v1 parity — formula injection safety; Excel treats a leading ``'`` as "force literal text").
+    ``upsert`` applies the same padding/escaping to every row it writes (via the same
+    :func:`_prepare_row` helper).
 
     If the workbook session expires mid-write (a workbook call 404s while a session header is
-    set), the session is recreated once and the same batch is retried before giving up.
+    set), the session is recreated once and the same batch is retried before giving up (the same
+    guarantee ``overwrite``/``append`` already had, via :func:`_patch_batch`).
     """
     with open(csv_path, newline="", encoding="utf-8") as csv_file:
         reader = csv.reader(csv_file)
@@ -686,7 +711,23 @@ def write_table(
             return False
         header_len = len(header)
 
-        if append:
+        if write_mode == WriteMode.UPSERT:
+            _write_upsert(
+                client,
+                drive_id,
+                file_id,
+                worksheet_id,
+                header,
+                reader,
+                key_columns or [],
+                batch_size,
+                is_new_sheet,
+                _session_header(session),
+                session,
+            )
+            return True
+
+        if write_mode == WriteMode.APPEND:
             start_row, start_col, include_header = _prepare_append(
                 client, drive_id, file_id, worksheet_id, is_new_sheet, header, _session_header(session)
             )
@@ -810,4 +851,212 @@ def _patch_batch(
         )
 
     logger.info("Inserted %d rows.", len(batch))
+    return session_id
+
+
+# ---------------------------------------------------------------------------------------------
+# Write algorithm — upsert (write_mode='upsert')
+# ---------------------------------------------------------------------------------------------
+
+
+def _normalize_column_name(name: str) -> str:
+    """Case/whitespace-insensitive column-name comparison for upsert's header matching.
+
+    Deliberately not :func:`client.headers.normalize_header_row`/:func:`~client.headers.to_ascii`
+    — those exist to build v1-parity ASCII-folded *display* names for the ``getWorksheets`` sync
+    action, a different concern. This only needs to decide "is this the same column", tolerant of
+    the kind of drift (casing, stray whitespace) that a human-maintained sheet header picks up
+    over time; it never changes what's actually written to a cell.
+    """
+    return name.strip().casefold()
+
+
+def _locate_key_columns(key_columns: list[str], header: list[str], header_owner: str) -> list[int]:
+    """Return each of ``key_columns``'s 0-based index in ``header`` (:func:`_normalize_column_name`
+    matched), or raise :class:`~client.exceptions.KeyColumnNotFoundError` naming the first missing
+    one and which header (``header_owner`` — "the input table's header" or "the existing worksheet
+    header") didn't have it.
+    """
+    normalized_header = [_normalize_column_name(cell) for cell in header]
+    indices: list[int] = []
+    for key_column in key_columns:
+        normalized_key = _normalize_column_name(key_column)
+        if normalized_key not in normalized_header:
+            raise KeyColumnNotFoundError(
+                f"Key column '{key_column}' not found in {header_owner}. Key columns must exist "
+                "in both the input table's header and the existing worksheet header."
+            )
+        indices.append(normalized_header.index(normalized_key))
+    return indices
+
+
+def _build_key(row: list[str], indices: list[int]) -> str:
+    """Build one composite lookup key from ``row``'s cells at ``indices`` (:data:`_KEY_SEPARATOR`
+    joined). A short ``row`` (fewer cells than a given index) contributes ``""`` for that
+    position, matching :func:`_prepare_row`'s own short-row padding.
+    """
+    return _KEY_SEPARATOR.join(row[index] if index < len(row) else "" for index in indices)
+
+
+def _group_contiguous_runs(sorted_rows: list[int], max_size: int) -> Iterator[list[int]]:
+    """Group ``sorted_rows`` (ascending, unique row numbers) into contiguous runs, each further
+    split so no run exceeds ``max_size`` — one ``range`` PATCH per yielded run (:func:`_write_upsert`),
+    so a batch of scattered updates costs one PATCH per contiguous block instead of one per row.
+    """
+    run: list[int] = []
+    for row in sorted_rows:
+        if run and row != run[-1] + 1:
+            yield from _chunk(run, max_size)
+            run = []
+        run.append(row)
+    if run:
+        yield from _chunk(run, max_size)
+
+
+def _chunk(run: list[int], max_size: int) -> Iterator[list[int]]:
+    for start in range(0, len(run), max_size):
+        yield run[start : start + max_size]
+
+
+def _write_upsert(
+    client: GraphClient,
+    drive_id: str,
+    file_id: str,
+    worksheet_id: str,
+    header: list[str],
+    reader: Iterator[list[str]],
+    key_columns: list[str],
+    batch_size: int,
+    is_new_sheet: bool,
+    headers: dict[str, Any],
+    session: str | None,
+) -> None:
+    """``write_mode='upsert'``: match CSV rows to existing sheet rows by ``key_columns``, PATCH
+    only what actually changed, and append everything else.
+
+    The whole CSV is read into memory (``data_rows``) — matching by key needs every row available
+    up front, unlike ``overwrite``/``append``'s single streaming pass. This mirrors the
+    memory/practicality trade-off already made for the existing side (see
+    :data:`_UPSERT_MAX_EXISTING_CELLS`): upsert is meant for the kind of table an incremental sync
+    naturally produces, not one so large that reading it twice is itself the bottleneck.
+
+    An empty (never-written) sheet — including one just created for this run — has nothing to
+    match against, so it behaves exactly like ``overwrite``: header + every row, written from A1.
+    Otherwise: the existing ``usedRange`` is read once (``$select=address,text`` — ``text`` so
+    every cell compares as the same kind of string the CSV itself parses into, avoiding a spurious
+    "changed" on a cell Excel happens to store/render as a number; the address comes back in the
+    same call, satisfying the "one GET" requirement without a second round trip for the header).
+    """
+    header_len = len(header)
+    data_rows = [list(row) for row in reader]
+
+    # Validated against the CSV header unconditionally, even for a brand-new/empty sheet that
+    # will never actually match anything this run: a key column that doesn't exist in the input
+    # table's own header is a configuration error regardless of the target sheet's state, and
+    # catching it here (no network call needed — the header's already in memory) is cheaper than
+    # only failing after a `usedRange` round trip a non-empty-sheet run would otherwise make.
+    csv_key_indices = _locate_key_columns(key_columns, header, "the input table's header")
+
+    if is_new_sheet:
+        _write_full_rewrite(client, drive_id, file_id, worksheet_id, header, data_rows, header_len, batch_size, session)
+        logger.info("Upsert: %d rows updated, %d appended, %d unchanged.", 0, len(data_rows), 0)
+        return
+
+    base_url = _worksheet_base_url(drive_id, file_id, worksheet_id)
+    used_range = client.get(
+        f"{base_url}/range/usedRange(valuesOnly=true)",
+        params={"$select": "address,text"},
+        headers=headers,
+        retry_transient_workbook=True,
+    ).json()
+    range_info = parse_range_address(used_range["address"])
+    cell_count = (range_info.end_row - range_info.start_row + 1) * (range_info.end_col - range_info.start_col + 1)
+    if cell_count > _UPSERT_MAX_EXISTING_CELLS:
+        raise UpsertRangeTooLargeError(
+            f"The existing worksheet's used range is too large for write_mode 'upsert' "
+            f"({cell_count} cells; the limit is {_UPSERT_MAX_EXISTING_CELLS}). Use write_mode "
+            "'overwrite' or 'append' instead."
+        )
+
+    existing_rows: list[list[str]] = [[str(cell) for cell in row] for row in (used_range.get("text") or [])]
+    if not existing_rows or not any(cell.strip() for cell in existing_rows[0]):
+        logger.info("Sheet is empty.")
+        _write_full_rewrite(client, drive_id, file_id, worksheet_id, header, data_rows, header_len, batch_size, session)
+        logger.info("Upsert: %d rows updated, %d appended, %d unchanged.", 0, len(data_rows), 0)
+        return
+
+    existing_header = existing_rows[0]
+    existing_data_rows = existing_rows[1:]
+
+    existing_key_indices = _locate_key_columns(key_columns, existing_header, "the existing worksheet header")
+
+    key_to_row: dict[str, tuple[int, list[str]]] = {}
+    duplicate_seen = False
+    for offset, existing_row in enumerate(existing_data_rows):
+        row_number = range_info.start_row + 1 + offset
+        key = _build_key(existing_row, existing_key_indices)
+        if key in key_to_row:
+            duplicate_seen = True
+        key_to_row[key] = (row_number, existing_row)
+    if duplicate_seen:
+        logger.warning(
+            "Duplicate key value(s) found among the existing worksheet's rows; using the last "
+            "occurrence of each for matching."
+        )
+
+    updates: dict[int, list[str]] = {}
+    appended_rows: list[list[str]] = []
+    unchanged_count = 0
+    for row in data_rows:
+        padded = _prepare_row(row, header_len)
+        key = _build_key(row, csv_key_indices)
+        match = key_to_row.get(key)
+        if match is None:
+            appended_rows.append(padded)
+            continue
+        row_number, existing_row = match
+        if _prepare_row(existing_row, header_len) == padded:
+            unchanged_count += 1
+            continue
+        updates[row_number] = padded
+
+    session_id = session
+    for run in _group_contiguous_runs(sorted(updates), batch_size):
+        batch = [updates[row_number] for row_number in run]
+        session_id = _patch_batch(
+            client, drive_id, file_id, worksheet_id, range_info.start_col, run[0], header_len, batch, session_id
+        )
+
+    append_start_row = range_info.end_row + 1
+    for batch in _batched(iter(appended_rows), batch_size):
+        session_id = _patch_batch(
+            client, drive_id, file_id, worksheet_id, range_info.start_col, append_start_row, header_len, batch, session_id
+        )
+        append_start_row += len(batch)
+
+    logger.info("Upsert: %d rows updated, %d appended, %d unchanged.", len(updates), len(appended_rows), unchanged_count)
+
+
+def _write_full_rewrite(
+    client: GraphClient,
+    drive_id: str,
+    file_id: str,
+    worksheet_id: str,
+    header: list[str],
+    data_rows: list[list[str]],
+    header_len: int,
+    batch_size: int,
+    session: str | None,
+) -> str | None:
+    """Write ``header`` + every one of ``data_rows`` from cell A1 (upsert's "nothing to match
+    against yet" case — a brand-new or genuinely empty sheet behaves exactly like ``overwrite``).
+    """
+    session_id = session
+    start_row = 1
+    for batch in _batched(itertools.chain([header], data_rows), batch_size):
+        padded_batch = [_prepare_row(row, header_len) for row in batch]
+        session_id = _patch_batch(
+            client, drive_id, file_id, worksheet_id, 1, start_row, header_len, padded_batch, session_id
+        )
+        start_row += len(padded_batch)
     return session_id

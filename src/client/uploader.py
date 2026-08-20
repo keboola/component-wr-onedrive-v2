@@ -58,10 +58,26 @@ MAX_RESUME_ATTEMPTS = 3
 # (`GET uploadUrl` -> `nextExpectedRanges`) rather than propagated immediately.
 _TRANSIENT_CHUNK_STATUSES = frozenset({429, 500, 502, 503, 504})
 
-# Only `{date:<strftime-format>}` placeholders are supported; anything else inside braces is a
-# user configuration error caught before any network call.
-_PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]*)\}")
+# Two placeholder syntaxes are supported, matched in one pass (the double-brace alternative tried
+# first at each position so it never gets shadowed by the single-brace one — see
+# `resolve_placeholders`):
+#
+# - `{{date}}` — the current, documented form. No arguments: always the resolved date (or the
+#   job's own start time when `destination.date` is unset), formatted `%Y-%m-%d` UTC.
+# - `{date:<strftime-format>}` — the original (pre-2026-08) form. Still resolved silently (never
+#   documented anymore, never shown in a tooltip/example) because already-recorded platform rows
+#   use it; there is no reason to force every existing config to be re-saved just to drop a
+#   feature that still works.
+#
+# Anything else inside single or double braces is a user configuration error caught before any
+# network call.
+_PLACEHOLDER_PATTERN = re.compile(r"\{\{([^{}]*)\}\}|\{([^{}]*)\}")
 _DATE_PLACEHOLDER_PREFIX = "date:"
+_DOUBLE_BRACE_DATE_TOKEN = "date"
+_DATE_STRFTIME_FORMAT = "%Y-%m-%d"
+_SUPPORTED_PLACEHOLDERS_HELP = (
+    "Supported placeholders: '{{date}}' (the resolved date, formatted YYYY-MM-DD)."
+)
 
 # Reserved characters within a single path segment (the `/` separator itself is never checked
 # here — paths are already split on it before validation). `#` and `%` are additionally reserved
@@ -79,18 +95,34 @@ MAX_PATH_LENGTH = 400
 
 
 def resolve_placeholders(path: str, now: datetime) -> str:
-    """Replace ``{date:<strftime-format>}`` tokens in ``path`` with ``now`` (caller-supplied UTC).
+    """Replace date placeholder tokens in ``path`` with ``now`` (caller-supplied UTC).
 
     ``now`` is resolved once by the caller at run start (design spec: "resolved at run start,
-    UTC") and threaded through here so every file in a run lands under the same folder even if
-    the run crosses a date boundary mid-execution.
+    UTC") and threaded through here so every file in a run lands under the same folder/file name
+    even if the run crosses a date boundary mid-execution. Applies wherever a row's own
+    placeholder-bearing field is resolved — today that's ``destination.folder_path`` and
+    ``csv.file_name``.
 
-    Any other ``{...}`` token is a configuration error: it either doesn't map to a supported
-    placeholder syntax or would silently pass an unresolved literal through to Graph.
+    ``{{date}}`` (no arguments) is the current, documented placeholder: it always resolves to
+    ``now``, formatted ``%Y-%m-%d``. The original ``{date:<strftime-format>}`` form is still
+    resolved the same as before — silently, for already-recorded platform rows — but is no longer
+    documented anywhere; new configs should use ``{{date}}``.
+
+    Any other ``{{...}}`` or ``{...}`` token is a configuration error: it either doesn't map to a
+    supported placeholder syntax or would silently pass an unresolved literal through to Graph.
     """
 
     def _replace(match: re.Match) -> str:
-        token = match.group(1)
+        double_brace_token = match.group(1)
+        if double_brace_token is not None:
+            if double_brace_token == _DOUBLE_BRACE_DATE_TOKEN:
+                return now.strftime(_DATE_STRFTIME_FORMAT)
+            raise InvalidPathError(
+                "Unknown placeholder '{{" + double_brace_token + "}}' in path '" + path + "'. "
+                + _SUPPORTED_PLACEHOLDERS_HELP
+            )
+
+        token = match.group(2)
         if token.startswith(_DATE_PLACEHOLDER_PREFIX):
             date_format = token[len(_DATE_PLACEHOLDER_PREFIX) :]
             if not date_format:
@@ -104,8 +136,7 @@ def resolve_placeholders(path: str, now: datetime) -> str:
                     f"Invalid strftime format '{date_format}' in placeholder '{{{token}}}' in path '{path}'."
                 ) from exc
         raise InvalidPathError(
-            f"Unknown placeholder '{{{token}}}' in destination.folder_path '{path}'. Only "
-            "'{date:<strftime-format>}' placeholders are supported (e.g. '{date:%Y-%m-%d}')."
+            "Unknown placeholder '{" + token + "}' in path '" + path + "'. " + _SUPPORTED_PLACEHOLDERS_HELP
         )
 
     return _PLACEHOLDER_PATTERN.sub(_replace, path)

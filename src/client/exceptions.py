@@ -134,6 +134,27 @@ class WorksheetNotFoundError(GraphNotFoundError):
     """
 
 
+class KeyColumnNotFoundError(GraphClientError):
+    """A ``write_mode='upsert'`` key column is missing from the CSV header or the existing sheet
+    header (or both).
+
+    Raised by :func:`client.excel_writer.write_table`'s upsert path — never carries a
+    ``status_code``, since this is a client-side column-matching check, not a Graph error.
+    """
+
+
+class UpsertRangeTooLargeError(GraphClientError):
+    """A ``write_mode='upsert'`` target worksheet's existing used range is too large to read
+    safely in one request.
+
+    Raised by :func:`client.excel_writer.write_table`'s upsert path *before* attempting the
+    combined ``usedRange`` read, as a practical guard well below Graph's own hard 5,000,000-cell
+    read limit (see :data:`client.excel_writer._UPSERT_MAX_EXISTING_CELLS`) — 'overwrite' or
+    'append' don't need to read the whole existing sheet into memory to build a key map, so they
+    remain the recommended way to write to a worksheet this large.
+    """
+
+
 class WorkbookNotFoundError(GraphNotFoundError):
     """A path-mode ``workbook.path`` target doesn't exist and the caller opted out of creation.
 

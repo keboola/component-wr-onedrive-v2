@@ -73,6 +73,26 @@ _LEGACY_MODE_ALIASES: dict[str, str] = {
 }
 
 
+class WriteMode(StrEnum):
+    """Mode 'worksheet' write semantics: how the row's data lands in the target worksheet.
+
+    ``OVERWRITE`` (default) clears the sheet and rewrites from A1; ``APPEND`` writes below the
+    existing used range (skipping the CSV's own header when the sheet already has one);
+    ``UPSERT`` matches rows by ``RowConfig.key_columns`` and updates them in place, appending
+    everything else (see ``client.excel_writer.write_table``'s upsert path for the algorithm).
+
+    Replaces the old ``RowConfig.append: bool`` field. A pre-existing ``append: true``/``false``
+    (every already-recorded VCR cassette config and every platform row created before this change)
+    is still accepted and silently normalized to ``APPEND``/``OVERWRITE`` before ``write_mode``
+    itself is ever validated (see ``RowConfig._normalize_write_mode_alias``) — nothing needs to be
+    re-saved.
+    """
+
+    OVERWRITE = "overwrite"
+    APPEND = "append"
+    UPSERT = "upsert"
+
+
 class Account(BaseModel):
     """Root-config account/tenant parameters."""
 
@@ -307,7 +327,12 @@ class RowConfig(BaseModel):
     csv: CsvOptions = Field(default_factory=CsvOptions)
     workbook: Workbook | None = None
     worksheet: Worksheet | None = None
-    append: bool = False
+    write_mode: WriteMode = WriteMode.OVERWRITE
+    # Column names (matching the input table's CSV header) that identify a row for `write_mode`
+    # 'upsert'; unused otherwise. Required non-empty when `write_mode` is 'upsert' (validated
+    # below) — an upsert with nothing to match rows on is a configuration error, not a silent
+    # append.
+    key_columns: list[str] = Field(default_factory=list)
     # `gt=0`: 0 would silently write nothing (batched in chunks of zero rows) and a negative
     # value produces an unmapped `ValueError` deep inside the Excel writer's batching helper —
     # neither is a sensible configuration, so both are rejected here as a normal validation error
@@ -328,6 +353,28 @@ class RowConfig(BaseModel):
             data = {**data, "mode": _LEGACY_MODE_ALIASES[data["mode"]]}
         return data
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_write_mode_alias(cls, data: Any) -> Any:
+        """Silently map the pre-``write_mode`` ``append: bool`` field to its ``write_mode``
+        equivalent before ``write_mode`` itself is ever validated.
+
+        Every already-recorded VCR cassette config and every platform row created before this
+        change carries ``append`` (never ``write_mode``) — ``append: true`` becomes
+        ``WriteMode.APPEND``, ``append: false``/absent becomes ``WriteMode.OVERWRITE``, exactly
+        matching the old field's own default. An explicit ``write_mode`` in the payload (there is
+        no such config today, but nothing stops one from being constructed directly, e.g. in
+        tests) always wins over a legacy ``append`` sitting alongside it.
+        """
+        if not isinstance(data, dict) or "append" not in data:
+            return data
+        if "write_mode" in data:
+            return data
+        normalized = dict(data)
+        legacy_append = normalized.pop("append")
+        normalized["write_mode"] = WriteMode.APPEND.value if legacy_append else WriteMode.OVERWRITE.value
+        return normalized
+
     @model_validator(mode="after")
     def _validate_mode_requirements(self) -> Self:
         if self.mode == Mode.WORKSHEET:
@@ -335,4 +382,10 @@ class RowConfig(BaseModel):
                 raise ValueError("workbook configuration is required when mode is 'worksheet'.")
             if self.worksheet is None:
                 raise ValueError("worksheet configuration is required when mode is 'worksheet'.")
+        if self.write_mode == WriteMode.UPSERT and not self.key_columns:
+            raise ValueError(
+                "key_columns is required (and must be non-empty) when write_mode is 'upsert' — "
+                "list the column name(s) from the input table's header that identify a row, e.g. "
+                "['id']."
+            )
         return self
