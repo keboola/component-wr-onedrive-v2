@@ -23,11 +23,13 @@ from client.exceptions import (
     GraphPermissionError,
     InvalidWorkbookFormatError,
     InvalidWorkbookPathError,
+    KeyColumnNotFoundError,
     MultipleSitesFoundError,
+    UpsertRangeTooLargeError,
     WorksheetNotFoundError,
 )
 from client.graph_client import GraphClient
-from configuration import Account, AccountType, Workbook, Worksheet
+from configuration import Account, AccountType, Workbook, Worksheet, WriteMode
 
 
 def _mock_graph_client() -> MagicMock:
@@ -528,7 +530,7 @@ class TestWriteTableEmptyCsv:
 
         result = write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=False, batch_size=5000, is_new_sheet=False, session=None,
+            write_mode=WriteMode.OVERWRITE, batch_size=5000, is_new_sheet=False, session=None,
         )
 
         assert result is False
@@ -546,7 +548,7 @@ class TestWriteTableOverwrite:
         with caplog.at_level(logging.INFO, logger="client.excel_writer"):
             result = write_table(
                 client, "drive-1", "file-1", "ws-1", csv_path,
-                append=False, batch_size=5000, is_new_sheet=False, session=None,
+                write_mode=WriteMode.OVERWRITE, batch_size=5000, is_new_sheet=False, session=None,
             )
 
         assert result is True
@@ -571,7 +573,7 @@ class TestWriteTableOverwrite:
 
         write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=False, batch_size=5000, is_new_sheet=True, session=None,
+            write_mode=WriteMode.OVERWRITE, batch_size=5000, is_new_sheet=True, session=None,
         )
 
         client.post.assert_not_called()
@@ -588,7 +590,7 @@ class TestWriteTableAppend:
         with caplog.at_level(logging.INFO, logger="client.excel_writer"):
             write_table(
                 client, "drive-1", "file-1", "ws-1", csv_path,
-                append=True, batch_size=5000, is_new_sheet=True, session=None,
+                write_mode=WriteMode.APPEND, batch_size=5000, is_new_sheet=True, session=None,
             )
 
         client.get.assert_not_called()
@@ -607,7 +609,7 @@ class TestWriteTableAppend:
 
         write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=True, batch_size=5000, is_new_sheet=False, session=None,
+            write_mode=WriteMode.APPEND, batch_size=5000, is_new_sheet=False, session=None,
         )
 
         assert client.patch.call_args.kwargs["json"] == {"values": [["1", "2"]]}
@@ -625,7 +627,7 @@ class TestWriteTableAppend:
         with caplog.at_level(logging.WARNING, logger="client.excel_writer"):
             write_table(
                 client, "drive-1", "file-1", "ws-1", csv_path,
-                append=True, batch_size=5000, is_new_sheet=False, session=None,
+                write_mode=WriteMode.APPEND, batch_size=5000, is_new_sheet=False, session=None,
             )
 
         assert "Headers mismatch. Ignored new header:" in caplog.text
@@ -643,7 +645,7 @@ class TestWriteTableAppend:
         with caplog.at_level(logging.INFO, logger="client.excel_writer"):
             write_table(
                 client, "drive-1", "file-1", "ws-1", csv_path,
-                append=True, batch_size=5000, is_new_sheet=False, session=None,
+                write_mode=WriteMode.APPEND, batch_size=5000, is_new_sheet=False, session=None,
             )
 
         assert "Sheet is empty." in caplog.text
@@ -661,7 +663,7 @@ class TestWriteTableAppend:
 
         write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=True, batch_size=5000, is_new_sheet=False, session=None,
+            write_mode=WriteMode.APPEND, batch_size=5000, is_new_sheet=False, session=None,
         )
 
         assert "range(address='C21:D21')" in client.patch.call_args.args[0]
@@ -676,7 +678,7 @@ class TestWriteTableBatchingAndFormatting:
 
         write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=False, batch_size=3, is_new_sheet=True, session=None,
+            write_mode=WriteMode.OVERWRITE, batch_size=3, is_new_sheet=True, session=None,
         )
 
         assert client.patch.call_count == 1
@@ -690,7 +692,7 @@ class TestWriteTableBatchingAndFormatting:
 
         write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=False, batch_size=3, is_new_sheet=True, session=None,
+            write_mode=WriteMode.OVERWRITE, batch_size=3, is_new_sheet=True, session=None,
         )
 
         assert client.patch.call_count == 2
@@ -707,7 +709,7 @@ class TestWriteTableBatchingAndFormatting:
 
         write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=False, batch_size=5000, is_new_sheet=True, session=None,
+            write_mode=WriteMode.OVERWRITE, batch_size=5000, is_new_sheet=True, session=None,
         )
 
         values = client.patch.call_args.kwargs["json"]["values"]
@@ -720,7 +722,7 @@ class TestWriteTableBatchingAndFormatting:
 
         write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=False, batch_size=5000, is_new_sheet=True, session=None,
+            write_mode=WriteMode.OVERWRITE, batch_size=5000, is_new_sheet=True, session=None,
         )
 
         values = client.patch.call_args.kwargs["json"]["values"]
@@ -735,7 +737,7 @@ class TestWriteTableBatchingAndFormatting:
         with caplog.at_level(logging.INFO, logger="client.excel_writer"):
             write_table(
                 client, "drive-1", "file-1", "ws-1", csv_path,
-                append=False, batch_size=2, is_new_sheet=True, session=None,
+                write_mode=WriteMode.OVERWRITE, batch_size=2, is_new_sheet=True, session=None,
             )
 
         assert caplog.text.count("Inserted 2 rows.") == 2
@@ -750,7 +752,7 @@ class TestWriteTableSessionExpiry:
 
         result = write_table(
             client, "drive-1", "file-1", "ws-1", csv_path,
-            append=True, batch_size=5000, is_new_sheet=True, session="sess-old",
+            write_mode=WriteMode.APPEND, batch_size=5000, is_new_sheet=True, session="sess-old",
         )
 
         assert result is True
@@ -773,7 +775,248 @@ class TestWriteTableSessionExpiry:
         with pytest.raises(GraphNotFoundError):
             write_table(
                 client, "drive-1", "file-1", "ws-1", csv_path,
-                append=True, batch_size=5000, is_new_sheet=True, session=None,
+                write_mode=WriteMode.APPEND, batch_size=5000, is_new_sheet=True, session=None,
             )
 
         client.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------------------------
+# Write algorithm — upsert (write_mode='upsert')
+# ---------------------------------------------------------------------------------------------
+
+
+def _used_range_response(address: str, rows: list[list[str]] | None = None) -> MagicMock:
+    body: dict = {"address": address}
+    if rows is not None:
+        body["text"] = rows
+    return _response(json_body=body)
+
+
+class TestWriteTableUpsertBasics:
+    def test_update_only_all_keys_match_and_differ(self, tmp_path):
+        client = MagicMock()
+        client.get.return_value = _used_range_response(
+            "Sheet1!A1:B3", [["id", "name"], ["1", "Alice"], ["2", "Bob"]]
+        )
+        client.patch.return_value = _response()
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["1", "Alicia"], ["2", "Bobby"]])
+
+        result = write_table(
+            client, "drive-1", "file-1", "ws-1", csv_path,
+            write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+        )
+
+        assert result is True
+        assert client.patch.call_count == 1
+        patch_call = client.patch.call_args
+        assert "range(address='A2:B3')" in patch_call.args[0]
+        assert patch_call.kwargs["json"] == {"values": [["1", "Alicia"], ["2", "Bobby"]]}
+
+    def test_append_only_no_keys_match(self, tmp_path):
+        client = MagicMock()
+        client.get.return_value = _used_range_response("Sheet1!A1:B2", [["id", "name"], ["1", "Alice"]])
+        client.patch.return_value = _response()
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["2", "Bob"], ["3", "Carol"]])
+
+        write_table(
+            client, "drive-1", "file-1", "ws-1", csv_path,
+            write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+        )
+
+        assert client.patch.call_count == 1
+        patch_call = client.patch.call_args
+        assert "range(address='A3:B4')" in patch_call.args[0]  # offset from usedRange's A1:B2
+        assert patch_call.kwargs["json"] == {"values": [["2", "Bob"], ["3", "Carol"]]}
+
+    def test_mixed_update_append_and_unchanged(self, tmp_path, caplog):
+        client = MagicMock()
+        client.get.return_value = _used_range_response(
+            "Sheet1!A1:B4",
+            [["id", "name"], ["1", "Alice"], ["2", "Bob"], ["3", "Carol"]],
+        )
+        client.patch.return_value = _response()
+        csv_path = _write_csv(
+            tmp_path / "t.csv",
+            [["id", "name"], ["1", "Alice"], ["2", "Bobby"], ["4", "Dave"]],
+        )
+
+        with caplog.at_level(logging.INFO, logger="client.excel_writer"):
+            write_table(
+                client, "drive-1", "file-1", "ws-1", csv_path,
+                write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+            )
+
+        assert client.patch.call_count == 2
+        update_call, append_call = client.patch.call_args_list
+        assert "range(address='A3:B3')" in update_call.args[0]  # id=2 lives at row 3
+        assert update_call.kwargs["json"] == {"values": [["2", "Bobby"]]}
+        assert "range(address='A5:B5')" in append_call.args[0]  # appended after end_row (4)
+        assert append_call.kwargs["json"] == {"values": [["4", "Dave"]]}
+        assert "Upsert: 1 rows updated, 1 appended, 1 unchanged." in caplog.text
+
+    def test_unchanged_rows_are_never_written(self, tmp_path):
+        client = MagicMock()
+        client.get.return_value = _used_range_response("Sheet1!A1:B2", [["id", "name"], ["1", "Alice"]])
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["1", "Alice"]])
+
+        write_table(
+            client, "drive-1", "file-1", "ws-1", csv_path,
+            write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+        )
+
+        client.patch.assert_not_called()
+
+    def test_composite_key_columns(self, tmp_path):
+        client = MagicMock()
+        client.get.return_value = _used_range_response(
+            "Sheet1!A1:C3",
+            [["region", "id", "amount"], ["us", "1", "10"], ["eu", "1", "20"]],
+        )
+        client.patch.return_value = _response()
+        csv_path = _write_csv(
+            tmp_path / "t.csv",
+            [["region", "id", "amount"], ["us", "1", "99"], ["eu", "1", "20"]],
+        )
+
+        write_table(
+            client, "drive-1", "file-1", "ws-1", csv_path,
+            write_mode=WriteMode.UPSERT, key_columns=["region", "id"], batch_size=5000, is_new_sheet=False, session=None,
+        )
+
+        # Only the "us"/"1" row changed (10 -> 99); "eu"/"1" (a distinct composite key) is unchanged.
+        assert client.patch.call_count == 1
+        patch_call = client.patch.call_args
+        assert "range(address='A2:C2')" in patch_call.args[0]
+        assert patch_call.kwargs["json"] == {"values": [["us", "1", "99"]]}
+
+
+class TestWriteTableUpsertMissingKeyColumn:
+    def test_key_column_missing_from_csv_header_raises_without_any_network_call(self, tmp_path):
+        client = MagicMock()
+        csv_path = _write_csv(tmp_path / "t.csv", [["name"], ["Alice"]])
+
+        with pytest.raises(KeyColumnNotFoundError, match="the input table's header"):
+            write_table(
+                client, "drive-1", "file-1", "ws-1", csv_path,
+                write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+            )
+
+        client.get.assert_not_called()
+
+    def test_key_column_missing_from_existing_sheet_header_raises(self, tmp_path):
+        client = MagicMock()
+        client.get.return_value = _used_range_response("Sheet1!A1:B2", [["identifier", "name"], ["1", "Alice"]])
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["1", "Alice"]])
+
+        with pytest.raises(KeyColumnNotFoundError, match="the existing worksheet header"):
+            write_table(
+                client, "drive-1", "file-1", "ws-1", csv_path,
+                write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+            )
+
+
+class TestWriteTableUpsertEmptySheet:
+    def test_new_sheet_behaves_like_overwrite(self, tmp_path, caplog):
+        client = MagicMock()
+        client.patch.return_value = _response()
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["1", "Alice"]])
+
+        with caplog.at_level(logging.INFO, logger="client.excel_writer"):
+            write_table(
+                client, "drive-1", "file-1", "ws-1", csv_path,
+                write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=True, session=None,
+            )
+
+        client.get.assert_not_called()
+        assert client.patch.call_count == 1
+        patch_call = client.patch.call_args
+        assert "range(address='A1:B2')" in patch_call.args[0]
+        assert patch_call.kwargs["json"] == {"values": [["id", "name"], ["1", "Alice"]]}
+        assert "Upsert: 0 rows updated, 1 appended, 0 unchanged." in caplog.text
+
+    def test_existing_but_genuinely_empty_sheet_behaves_like_overwrite(self, tmp_path, caplog):
+        client = MagicMock()
+        client.get.return_value = _used_range_response("Sheet1!A1:A1", [[""]])
+        client.patch.return_value = _response()
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["1", "Alice"]])
+
+        with caplog.at_level(logging.INFO, logger="client.excel_writer"):
+            write_table(
+                client, "drive-1", "file-1", "ws-1", csv_path,
+                write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+            )
+
+        assert client.patch.call_count == 1
+        patch_call = client.patch.call_args
+        assert "range(address='A1:B2')" in patch_call.args[0]
+        assert patch_call.kwargs["json"] == {"values": [["id", "name"], ["1", "Alice"]]}
+        assert "Sheet is empty." in caplog.text
+        assert "Upsert: 0 rows updated, 1 appended, 0 unchanged." in caplog.text
+
+
+class TestWriteTableUpsertContiguousRuns:
+    def test_scattered_updates_grouped_into_contiguous_runs_and_batch_size_splits_a_run(self, tmp_path):
+        # 10 existing data rows (sheet rows 2-11); ids 2, 3, 4 (sheet rows 3, 4, 5) and id 9
+        # (sheet row 10) get new values — one contiguous run of 3 and one lone row.
+        existing_rows = [["id", "value"]] + [[str(i), "old"] for i in range(1, 11)]
+        client = MagicMock()
+        client.get.return_value = _used_range_response("Sheet1!A1:B11", existing_rows)
+        client.patch.return_value = _response()
+
+        csv_rows = [["id", "value"]] + [
+            [str(i), "new" if i in (2, 3, 4, 9) else "old"] for i in range(1, 11)
+        ]
+        csv_path = _write_csv(tmp_path / "t.csv", csv_rows)
+
+        write_table(
+            client, "drive-1", "file-1", "ws-1", csv_path,
+            write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=2, is_new_sheet=False, session=None,
+        )
+
+        # Contiguous run [3, 4, 5] (sheet rows for ids 2/3/4) split by batch_size=2 into [3, 4]
+        # then [5]; row 10 (id 9) is its own single-row run — three PATCHes total, none touching
+        # the six unchanged rows.
+        assert client.patch.call_count == 3
+        addresses = [call.args[0] for call in client.patch.call_args_list]
+        assert any("range(address='A3:B4')" in address for address in addresses)
+        assert any("range(address='A5:B5')" in address for address in addresses)
+        assert any("range(address='A10:B10')" in address for address in addresses)
+
+
+class TestWriteTableUpsertDuplicateKeys:
+    def test_duplicate_existing_keys_last_wins_and_warns_once(self, tmp_path, caplog):
+        client = MagicMock()
+        client.get.return_value = _used_range_response(
+            "Sheet1!A1:B3",
+            [["id", "name"], ["1", "Alice"], ["1", "Alice-Duplicate"]],
+        )
+        client.patch.return_value = _response()
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["1", "Alicia"]])
+
+        with caplog.at_level(logging.WARNING, logger="client.excel_writer"):
+            write_table(
+                client, "drive-1", "file-1", "ws-1", csv_path,
+                write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+            )
+
+        assert caplog.text.count("Duplicate key value(s)") == 1
+        # The *last* existing occurrence of id=1 is row 3 — that's the row the update targets.
+        assert client.patch.call_count == 1
+        assert "range(address='A3:B3')" in client.patch.call_args.args[0]
+        assert client.patch.call_args.kwargs["json"] == {"values": [["1", "Alicia"]]}
+
+
+class TestWriteTableUpsertOversizedGuardrail:
+    def test_oversized_existing_range_raises_before_reading_values(self, tmp_path):
+        client = MagicMock()
+        client.get.return_value = _used_range_response("Sheet1!A1:Z1000000")  # no "text" — never read
+        csv_path = _write_csv(tmp_path / "t.csv", [["id", "name"], ["1", "Alice"]])
+
+        with pytest.raises(UpsertRangeTooLargeError, match="too large"):
+            write_table(
+                client, "drive-1", "file-1", "ws-1", csv_path,
+                write_mode=WriteMode.UPSERT, key_columns=["id"], batch_size=5000, is_new_sheet=False, session=None,
+            )
+
+        client.patch.assert_not_called()

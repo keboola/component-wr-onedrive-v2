@@ -79,6 +79,49 @@ class TestResolvePlaceholders:
             resolve_placeholders("reports/{date:}", now)
 
 
+class TestDoubleBraceDatePlaceholder:
+    """Change 1: `{{date}}` is the current, documented placeholder — always `now` formatted
+    `%Y-%m-%d`, no arguments. The old `{date:<strftime-format>}` form (`TestResolvePlaceholders`
+    above) keeps resolving silently for already-recorded platform rows, but is never the
+    recommended way to write a new one."""
+
+    def test_resolves_in_a_folder_path(self):
+        now = datetime(2026, 8, 17, 12, 30, tzinfo=UTC)
+
+        assert resolve_placeholders("acme/reports/{{date}}/", now) == "acme/reports/2026-08-17/"
+
+    def test_resolves_in_a_file_name(self):
+        now = datetime(2026, 1, 5, tzinfo=UTC)
+
+        assert resolve_placeholders("orders-{{date}}.csv", now) == "orders-2026-01-05.csv"
+
+    def test_always_formats_yyyy_mm_dd_regardless_of_time_of_day(self):
+        now = datetime(2026, 8, 17, 23, 59, 59, tzinfo=UTC)
+
+        assert resolve_placeholders("{{date}}", now) == "2026-08-17"
+
+    def test_unknown_double_brace_token_raises_invalid_path_error(self):
+        now = datetime(2026, 8, 17, tzinfo=UTC)
+
+        with pytest.raises(InvalidPathError, match="Unknown placeholder '\\{\\{table_name\\}\\}'"):
+            resolve_placeholders("reports/{{table_name}}", now)
+
+    def test_legacy_strftime_placeholder_still_resolves_alongside_double_brace(self):
+        # Silent legacy handling: an existing row could plausibly mix both forms across separate
+        # fields (folder_path still on the old syntax, csv.file_name migrated) — both must resolve
+        # from the same `now` in one call.
+        now = datetime(2026, 8, 17, tzinfo=UTC)
+
+        result = resolve_placeholders("reports/{date:%Y}/{{date}}", now)
+
+        assert result == "reports/2026/2026-08-17"
+
+    def test_path_without_any_placeholder_is_unchanged(self):
+        now = datetime(2026, 8, 17, tzinfo=UTC)
+
+        assert resolve_placeholders("static/folder", now) == "static/folder"
+
+
 class TestValidatePath:
     @pytest.mark.parametrize("char", list('"*:<>?\\|'))
     def test_reserved_character_rejected(self, char):

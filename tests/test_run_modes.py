@@ -23,6 +23,7 @@ from keboola.component.exceptions import UserException
 
 from client.exceptions import GraphConnectionError, GraphPermissionError
 from component import Component
+from configuration import WriteMode
 
 
 def _oauth_credentials(refresh_token: str = "refresh-config") -> dict:
@@ -246,6 +247,52 @@ class TestFileModeMergedTableInput:
             pytest.raises(UserException, match="csv.file_name can only be used when exactly one table is mapped"),
         ):
             comp.run()
+
+    @freeze_time("2026-08-17")
+    def test_csv_file_name_resolves_the_double_brace_date_placeholder(self, tmp_path):
+        # Change 1: `{{date}}` applies to `csv.file_name`, not just `destination.folder_path`,
+        # resolved against the same `now` (job start here — `destination.date` unset).
+        parameters = {
+            "mode": "file",
+            "account": {"account_type": "private_onedrive"},
+            "destination": {},
+            "csv": {"file_name": "orders-{{date}}.csv"},
+        }
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id\n1\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}) as mock_upload,
+        ):
+            comp.run()
+
+        assert mock_upload.call_args.args[4] == "orders-2026-08-17.csv"
+
+    def test_csv_file_name_legacy_strftime_placeholder_still_resolves(self, tmp_path):
+        # Silent legacy handling: an already-configured row's `csv.file_name` could still use the
+        # pre-`{{date}}` strftime form — it must keep resolving unchanged.
+        parameters = {
+            "mode": "file",
+            "account": {"account_type": "private_onedrive"},
+            "destination": {},
+            "csv": {"file_name": "orders-{date:%Y}.csv"},
+        }
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id\n1\n"})
+
+        with (
+            freeze_time("2026-08-17"),
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id", return_value="drive-1"),
+            mock.patch("component.ensure_folder", return_value="root-id"),
+            mock.patch("component.upload_file", return_value={"id": "item-1"}) as mock_upload,
+        ):
+            comp.run()
+
+        assert mock_upload.call_args.args[4] == "orders-2026.csv"
 
 
 class TestResolveNow:
@@ -724,10 +771,37 @@ class TestExcelMode:
         mock_write.assert_called_once()
         write_args = mock_write.call_args
         assert write_args.args[1:4] == ("wb-drive", "wb-file", "sheet-1")
-        assert write_args.kwargs["append"] is True
+        assert write_args.kwargs["write_mode"] == WriteMode.APPEND
+        assert write_args.kwargs["key_columns"] == []
         assert write_args.kwargs["batch_size"] == 1234
         assert write_args.kwargs["is_new_sheet"] is False
         assert write_args.kwargs["session"] == "session-1"
+
+    def test_upsert_write_mode_and_key_columns_are_passed_to_write_table(self, tmp_path):
+        parameters = {
+            "mode": "worksheet",
+            "account": {"account_type": "onedrive_for_business", "tenant_id": "tenant-1"},
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+            "write_mode": "upsert",
+            "key_columns": ["id"],
+        }
+        comp = _build_component(tmp_path, parameters, tables={"mytable": "id,name\n1,a\n"})
+
+        with (
+            mock.patch("component.RefreshTokenProvider", return_value=_fake_token_provider()),
+            mock.patch("component.GraphClient", return_value=MagicMock()),
+            mock.patch("component.resolve_drive_id"),
+            mock.patch("component.resolve_workbook", return_value=("wb-drive", "wb-file", False)),
+            mock.patch("component.workbook_session", return_value=_fake_session_context_manager("session-1")),
+            mock.patch("component.resolve_worksheet", return_value=("sheet-1", False, "Sheet1")),
+            mock.patch("component.write_table", return_value=True) as mock_write,
+        ):
+            comp.run()
+
+        mock_write.assert_called_once()
+        assert mock_write.call_args.kwargs["write_mode"] == WriteMode.UPSERT
+        assert mock_write.call_args.kwargs["key_columns"] == ["id"]
 
     def test_warns_when_file_input_mapping_is_also_present(self, tmp_path, caplog):
         parameters = {

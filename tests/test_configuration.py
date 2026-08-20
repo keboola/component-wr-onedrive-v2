@@ -13,6 +13,7 @@ from configuration import (
     WorkbookTargeting,
     Worksheet,
     WorksheetSelection,
+    WriteMode,
 )
 
 
@@ -222,7 +223,8 @@ class TestRowConfig:
     def test_file_mode_minimal_config(self):
         config = RowConfig(mode="file", account=self._account_params())
         assert config.mode == Mode.FILE
-        assert config.append is False
+        assert config.write_mode == WriteMode.OVERWRITE
+        assert config.key_columns == []
         assert config.batch_size == 5000
         assert isinstance(config.destination, Destination)
         assert isinstance(config.csv, CsvOptions)
@@ -320,12 +322,82 @@ class TestRowConfig:
         assert config.csv.delimiter == ";"
         assert config.workbook.file_id == "01ABCDEF"
         assert config.worksheet.position == 0
-        assert config.append is True
+        assert config.write_mode == WriteMode.APPEND
         assert config.batch_size == 2500
 
     def test_account_error_propagates_through_row_config(self):
         with pytest.raises(ValidationError, match="account.tenant_id is required"):
             RowConfig(mode="file", account={"account_type": "sharepoint"})
+
+
+class TestWriteModeAndKeyColumns:
+    """Change 3: `write_mode` (enum) replaces `append: bool`; `key_columns` is required
+    (non-empty) when `write_mode` is 'upsert'. A pre-existing `append: true`/`false` (every
+    already-recorded VCR cassette and every platform row created before this change) is silently
+    normalized to its `write_mode` equivalent."""
+
+    def _account_params(self, **overrides):
+        params = {"account_type": "private_onedrive"}
+        params.update(overrides)
+        return params
+
+    def _worksheet_row(self, **overrides):
+        params = {
+            "mode": "worksheet",
+            "account": self._account_params(),
+            "workbook": {"path": "/book.xlsx"},
+            "worksheet": {"name": "Sheet1"},
+        }
+        params.update(overrides)
+        return params
+
+    def test_default_write_mode_is_overwrite(self):
+        config = RowConfig(**self._worksheet_row())
+        assert config.write_mode == WriteMode.OVERWRITE
+        assert config.key_columns == []
+
+    def test_write_mode_upsert_accepted_with_key_columns(self):
+        config = RowConfig(**self._worksheet_row(write_mode="upsert", key_columns=["id"]))
+        assert config.write_mode == WriteMode.UPSERT
+        assert config.key_columns == ["id"]
+
+    def test_write_mode_upsert_with_composite_key_columns(self):
+        config = RowConfig(**self._worksheet_row(write_mode="upsert", key_columns=["region", "id"]))
+        assert config.key_columns == ["region", "id"]
+
+    def test_write_mode_upsert_without_key_columns_raises(self):
+        with pytest.raises(ValidationError, match="key_columns is required"):
+            RowConfig(**self._worksheet_row(write_mode="upsert"))
+
+    def test_write_mode_upsert_with_empty_key_columns_list_raises(self):
+        with pytest.raises(ValidationError, match="key_columns is required"):
+            RowConfig(**self._worksheet_row(write_mode="upsert", key_columns=[]))
+
+    def test_key_columns_without_upsert_is_not_required(self):
+        config = RowConfig(**self._worksheet_row(write_mode="append"))
+        assert config.key_columns == []
+
+    def test_invalid_write_mode_raises(self):
+        with pytest.raises(ValidationError):
+            RowConfig(**self._worksheet_row(write_mode="not_a_mode"))
+
+    def test_legacy_append_true_normalizes_to_write_mode_append(self):
+        config = RowConfig(**self._worksheet_row(append=True))
+        assert config.write_mode == WriteMode.APPEND
+
+    def test_legacy_append_false_normalizes_to_write_mode_overwrite(self):
+        config = RowConfig(**self._worksheet_row(append=False))
+        assert config.write_mode == WriteMode.OVERWRITE
+
+    def test_legacy_append_absent_defaults_to_overwrite(self):
+        config = RowConfig(**self._worksheet_row())
+        assert config.write_mode == WriteMode.OVERWRITE
+
+    def test_explicit_write_mode_wins_over_legacy_append_if_both_present(self):
+        # Not a real config shape (no such row exists today), but the before-validator must not
+        # let a stray legacy `append` clobber an explicit `write_mode`.
+        config = RowConfig(**self._worksheet_row(append=True, write_mode="overwrite"))
+        assert config.write_mode == WriteMode.OVERWRITE
 
 
 class TestModeAliasNormalization:

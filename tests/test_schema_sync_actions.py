@@ -119,9 +119,9 @@ class TestModeSchemaTwoModes:
         assert schema["properties"]["workbook"]["options"]["dependencies"] == {"mode": "worksheet"}
         assert schema["properties"]["worksheet"]["options"]["dependencies"] == {"mode": "worksheet"}
 
-    def test_append_and_batch_size_depend_on_mode_worksheet(self):
+    def test_write_mode_and_batch_size_depend_on_mode_worksheet(self):
         schema = self._row_schema()
-        assert schema["properties"]["append"]["options"]["dependencies"] == {"mode": "worksheet"}
+        assert schema["properties"]["write_mode"]["options"]["dependencies"] == {"mode": "worksheet"}
         assert schema["properties"]["batch_size"]["options"]["dependencies"] == {"mode": "worksheet"}
 
 
@@ -194,6 +194,92 @@ class TestWorksheetSelectionSchema:
         schema = json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
         worksheet_text = json.dumps(schema["properties"]["worksheet"]).lower()
         assert "rename" not in worksheet_text
+
+
+class TestWriteModeSchema:
+    """Change 3: `write_mode` (Full Load / Append / Upsert (Incremental)) replaces the old
+    `append` checkbox; `key_columns` is a new array field shown only for Upsert."""
+
+    def _row_schema(self) -> dict:
+        return json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+
+    def test_append_field_is_gone(self):
+        schema = self._row_schema()
+        assert "append" not in schema["properties"]
+
+    def test_write_mode_enum_and_titles(self):
+        write_mode = self._row_schema()["properties"]["write_mode"]
+        assert write_mode["enum"] == ["overwrite", "append", "upsert"]
+        assert write_mode["options"]["enum_titles"] == ["Full Load", "Append", "Upsert (Incremental)"]
+        assert write_mode["default"] == "overwrite"
+
+    def test_key_columns_is_an_array_of_strings(self):
+        key_columns = self._row_schema()["properties"]["key_columns"]
+        assert key_columns["type"] == "array"
+        assert key_columns["items"]["type"] == "string"
+        assert key_columns["title"] == "Key Columns"
+
+    def test_key_columns_only_shown_for_upsert(self):
+        key_columns = self._row_schema()["properties"]["key_columns"]
+        assert key_columns["options"]["dependencies"] == {"write_mode": "upsert"}
+
+
+class TestInputAttributePlaceholders:
+    """Change 2: ghost-text placeholders (`options.inputAttributes.placeholder`) on the text
+    fields listed in the task — verified against
+    `component-build-ui/references/advanced.md`'s "Placeholder Hints" pattern."""
+
+    def _row_schema(self) -> dict:
+        return json.loads((COMPONENT_CONFIG_DIR / "configRowSchema.json").read_text())
+
+    def _root_schema(self) -> dict:
+        return json.loads((COMPONENT_CONFIG_DIR / "configSchema.json").read_text())
+
+    def test_root_account_fields_have_placeholders(self):
+        account_properties = self._root_schema()["properties"]["account"]["properties"]
+        assert account_properties["tenant_id"]["options"]["inputAttributes"] == {
+            "placeholder": "00000000-0000-0000-0000-000000000000"
+        }
+        assert account_properties["site_url"]["options"]["inputAttributes"] == {
+            "placeholder": "https://contoso.sharepoint.com/sites/DataTeam"
+        }
+
+    def test_destination_and_csv_fields_have_placeholders(self):
+        schema = self._row_schema()
+        destination = schema["properties"]["destination"]["properties"]
+        assert destination["folder_path"]["options"]["inputAttributes"] == {"placeholder": "acme/reports/{{date}}/"}
+        assert destination["date"]["options"]["inputAttributes"] == {"placeholder": "yesterday"}
+        csv_section = schema["properties"]["csv"]["properties"]
+        assert csv_section["file_name"]["options"]["inputAttributes"] == {"placeholder": "orders.csv"}
+
+    def test_workbook_and_worksheet_fields_have_placeholders(self):
+        schema = self._row_schema()
+        workbook = schema["properties"]["workbook"]["properties"]
+        assert workbook["path"]["options"]["inputAttributes"] == {
+            "placeholder": "site://Site Name/folder/workbook.xlsx"
+        }
+        worksheet = schema["properties"]["worksheet"]["properties"]
+        assert worksheet["name"]["options"]["inputAttributes"] == {"placeholder": "Sheet1"}
+
+
+class TestNoStrftimeExamplesAnywhere:
+    """Change 1: `{{date}}` replaces the strftime `{date:%Y-%m-%d}` placeholder everywhere the
+    user can see it — the legacy form keeps *working* (silently), but must not appear in any
+    schema tooltip/description/example, the README, or the configuration description anymore."""
+
+    def test_no_strftime_style_examples_in_the_schemas(self):
+        for filename in ("configRowSchema.json", "configSchema.json"):
+            text = (COMPONENT_CONFIG_DIR / filename).read_text()
+            assert "strftime" not in text.lower()
+            assert "%Y" not in text
+            assert "{date:" not in text
+
+    def test_no_strftime_style_examples_in_the_readme_and_description(self):
+        readme = (COMPONENT_CONFIG_DIR.parent / "README.md").read_text()
+        description = (COMPONENT_CONFIG_DIR / "configuration_description.md").read_text()
+        for text in (readme, description):
+            assert "strftime" not in text.lower()
+            assert "{date:" not in text
 
 
 class TestRowSchemaHelperAccountType:
