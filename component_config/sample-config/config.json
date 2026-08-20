@@ -20,7 +20,7 @@
       "tenant_id": "00000000-0000-0000-0000-000000000000",
       "site_url": "https://contoso.sharepoint.com/sites/DataTeam"
     },
-    "mode": "table_csv",
+    "mode": "file",
     "destination": {
       "drive_id": "",
       "folder_path": "reports/{date:%Y-%m-%d}",

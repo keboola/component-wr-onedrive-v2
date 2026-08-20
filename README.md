@@ -3,8 +3,8 @@ OneDrive/SharePoint Writer
 
 Writes files and tables from Keboola to Microsoft OneDrive and SharePoint document libraries via
 Microsoft Graph. This component is the successor to `keboola.wr-onedrive` ("OneDrive Excel
-Sheets") — it keeps full feature parity for Excel worksheet writes and adds two new output modes:
-plain file upload and table-as-CSV.
+Sheets") — it keeps full feature parity for Excel worksheet writes and adds a second output mode
+for plain file/CSV upload.
 
 **Table of Contents:**
 
@@ -13,20 +13,23 @@ plain file upload and table-as-CSV.
 Functionality Notes
 ====================
 
-Each configuration row targets exactly one destination, in one of three output modes:
+Each configuration row targets exactly one destination, in one of two output modes:
 
-- **Upload Files** (`mode: file`) — every file in the row's file input mapping is uploaded as-is
-  to a document library folder.
-- **Table as CSV** (`mode: table_csv`) — the row's input table is written to the library as a CSV
-  file.
-- **Table as Excel Worksheet** (`mode: table_excel`) — the row's input table is written into a
-  worksheet of an XLSX workbook, creating the workbook/worksheet when needed, with overwrite or
-  append semantics.
+- **File** (`mode: file`) — uploads every file in the row's file input mapping as-is, *and*
+  writes every table in the row's table input mapping as a CSV file, both to the same document
+  library folder. Either input mapping may be empty, but not both.
+- **Worksheet** (`mode: worksheet`) — the row's single input table is written into a worksheet of
+  an XLSX workbook, creating the workbook/worksheet when needed, with overwrite or append
+  semantics.
 
 Rows run sequentially. There is no results/audit output table — the component only writes to
 OneDrive/SharePoint; it does not produce any Storage output tables. Column mapping is not
-supported: file and CSV modes upload data as-is, and Excel mode uses v1's header-based semantics
-(see below) rather than an explicit source/destination column mapping.
+supported: mode `file` uploads/writes data as-is, and mode `worksheet` uses v1's header-based
+semantics (see below) rather than an explicit source/destination column mapping.
+
+> **Note on older configurations:** the pre-2026-08 mode names `table_csv` and `table_excel` are
+> still accepted (silently normalized to `file`/`worksheet` respectively) — nothing needs to be
+> re-saved.
 
 Authorization
 =============
@@ -60,13 +63,15 @@ The configuration has two levels:
 
 - **Root configuration** — set once per configuration: the **Account** (account type, tenant ID,
   site URL as needed) and the OAuth authorization.
-- **Configuration rows** — one row per destination. Each row selects an **Output Mode** and
-  attaches its own input mapping (a file input mapping for `file` mode, exactly one input table for
-  `table_csv`/`table_excel` mode — zero or more than one table in a CSV/Excel row is a
-  configuration error).
+- **Configuration rows** — one row per destination. Each row selects an **Output Mode** and attaches
+  its own input mapping:
+  - mode `file` — any combination of a file input mapping (zero or more files) and a table input
+    mapping (zero or more tables), as long as at least one of the two is non-empty.
+  - mode `worksheet` — exactly one input table (zero or more than one is a configuration error);
+    any file input mapping is ignored (with a warning).
 
-Destination (file / table_csv modes)
--------------------------------------
+Destination (mode `file`)
+--------------------------
 
 - **Document Library** (`destination.drive_id`) — the target document library (drive), selected
   from the "List Libraries" dropdown. Applies to every account type when set (drives are globally
@@ -92,33 +97,50 @@ Destination (file / table_csv modes)
   name already exists at the destination: `fail` (default — stop with an error), `replace`
   (overwrite it), or `rename` (upload under a new, non-colliding name).
 
-CSV options (table_csv mode)
-------------------------------
+CSV options for mapped tables (mode `file`)
+---------------------------------------------
 
-- **File Name** (`csv.file_name`) — name of the uploaded file. Defaults to the input table's name
-  with a `.csv` extension when left empty.
+Only applies to tables from the row's table input mapping — mapped files are always uploaded
+as-is, byte-for-byte.
+
+- **File Name** (`csv.file_name`) — name of the uploaded CSV file. Only applies when exactly one
+  table is mapped to the row (mapping more than one table while also setting `csv.file_name` is a
+  configuration error). Defaults to the table's name with a `.csv` extension when left empty; with
+  more than one table mapped, each is uploaded as `<table name>.csv`.
 - **Delimiter** (`csv.delimiter`) — field delimiter character, default `,`.
 - **Enclosure** (`csv.enclosure`) — field enclosure (quote) character, default `"`.
 - **Include Header** (`csv.include_header`) — whether to include the column header row, default
   `true`.
 
-Workbook and worksheet (table_excel mode)
+Workbook and worksheet (mode `worksheet`)
 -------------------------------------------
 
-- **Workbook Path** (`workbook.path`) — where the target workbook lives; created automatically
-  when missing. Accepts several forms:
+**Workbook targeting** (`workbook.targeting`) picks how the target workbook is identified:
+
+- **Pick via dropdowns** (`pick`, default) — target an existing workbook by id, using the
+  **Library** (`workbook.drive_id`) and **Workbook** (`workbook.file_id`) dropdowns together.
+- **By path** (`path`) — target (and auto-create, if missing) a workbook via **Workbook Path**
+  (`workbook.path`), which accepts several forms:
   - a library-relative path, e.g. `/Reports/data.xlsx`
   - `drive://{driveId}/path`
   - `site://{siteName}/path`
   - an `https://` sharing link
 
-  Alternatively, target an existing workbook by id using **Drive ID** (`workbook.drive_id`) and
-  **File ID** (`workbook.file_id`) together — obtain both from the `search` sync action. `path` and
-  the drive/file id pair are mutually exclusive; never combine them.
-- **Worksheet Name** (`worksheet.name`), **Worksheet ID** (`worksheet.id`), **Worksheet Position**
-  (`worksheet.position`) — select or create the target worksheet. Provide `name` alone to select or
-  create a worksheet by that name; combine `id` or `position` with `name` to rename that worksheet.
-  `id` and `position` are mutually exclusive.
+  Use the `search` sync action to check whether a path already resolves to an existing workbook.
+
+Only the fields for the selected targeting are used; the other form's value (if any is still
+sitting in the row's configuration from before switching `workbook.targeting`) is ignored.
+
+**Worksheet selection** (`worksheet.selection`) picks how the target worksheet is identified:
+
+- **Pick existing** (`pick`, default) — target an existing sheet by id, using the **Worksheet ID**
+  (`worksheet.id`) dropdown (populated from the workbook configured above). Never renames the
+  sheet.
+- **By name (creates if missing)** (`name`) — target **Worksheet Name** (`worksheet.name`) alone;
+  the sheet is created if it doesn't exist yet.
+
+As with workbook targeting, only the selected form's field is used.
+
 - **Append** (`append`) — when `false` (default), the worksheet is cleared and rewritten from cell
   A1 (overwrite). When `true`, rows are appended below the existing used range; if the sheet
   already has a header, the CSV's own header row is skipped on append (a column-count mismatch
@@ -130,12 +152,13 @@ Sync Actions
 ============
 
 The UI exposes several sync actions to help configure a row: **Test Connection** and **List
-Libraries** (root configuration), and **Search**, **Get Worksheets**, **Create Workbook**, and
-**Create Worksheet** (used while configuring `table_excel` mode, e.g. from the Workbook Path
-field's search helper). Sync actions are normally read-only lookups — **Create Workbook** and
-**Create Worksheet** are a deliberate exception: they perform a real write (creating an empty
-workbook or worksheet), matching v1's own sync-action behavior. Only use them once you actually
-want that workbook or worksheet created.
+Libraries** (root configuration), and **List Workbooks**, **List Worksheets**, **Search**, **Get
+Worksheets**, **Create Workbook**, and **Create Worksheet** (used while configuring mode
+`worksheet`, e.g. from the Workbook/Worksheet dropdowns or the Workbook Path field's search
+helper). Sync actions are normally read-only lookups — **Create Workbook** and **Create Worksheet**
+are a deliberate exception: they perform a real write (creating an empty workbook or worksheet),
+matching v1's own sync-action behavior. Only use them once you actually want that workbook or
+worksheet created.
 
 Output
 ======

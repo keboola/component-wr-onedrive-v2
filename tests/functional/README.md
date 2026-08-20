@@ -97,6 +97,17 @@ signed-URL params) — see `vcr-validation-gate.md`.
 
 ## Scenarios (`tests/setup/configs.json`)
 
+**A note on `mode` values below (2026-08-20 UX redesign):** the component's output modes were
+reduced from three (`file`/`table_csv`/`table_excel`) to two (`file`/`worksheet`) — `table_csv`
+merged into `file` (which now also uploads mapped files), and `table_excel` was renamed to
+`worksheet`. The pre-redesign names are still accepted (silently normalized — see
+`configuration.Mode`/`RowConfig._normalize_mode_alias`) and are deliberately left as-is in every
+scenario config below and in `tests/setup/configs.json` itself, rather than rewritten to the
+current names: since every cassette here was recorded against the *old* mode values, keeping the
+configs unchanged is what actually proves the alias normalization replays a real, previously
+recorded config unchanged — recording new cassettes under the current names would only prove the
+new names work, not that the old ones still do.
+
 | # | Scenario | Covers |
 |---|---|---|
 | 01 | `testConnection` | OAuth refresh-token grant (token refresh) + `GET /me` |
