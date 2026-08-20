@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import dateparser
+import requests
 from keboola.component.base import ComponentBase, sync_action
 from keboola.component.dao import FileDefinition, TableDefinition
 from keboola.component.exceptions import UserException
@@ -315,6 +316,36 @@ class Component(ComponentBase):
             SelectElement(label=_format_worksheet_label(item), value=item["id"])
             for item in worksheets
         ]
+
+    @sync_action("listColumns")
+    def list_columns(self) -> list[SelectElement]:
+        """List the row's input table columns, for the ``key_columns`` multi-select.
+
+        Same pattern as ``keboola.wr-delta-lake``'s ``list_table_columns``: the column names come
+        from the Storage API using the platform-forwarded token (requires the app's
+        ``forwardToken`` flag in the Developer Portal), reading the FIRST table in the row's
+        input mapping — key columns only make sense for the one table a worksheet row writes.
+        """
+        tables = self.configuration.tables_input_mapping
+        if not tables:
+            raise UserException("Map an input table on this row first — key columns are its column names.")
+        url = self.environment_variables.url
+        token = self.environment_variables.token
+        if not url or not token:
+            raise UserException(
+                "The Storage token is not forwarded to the component (Developer Portal "
+                "'forwardToken' flag), so columns cannot be listed. Type the column names manually."
+            )
+        response = requests.get(
+            f"{url}/v2/storage/tables/{tables[0].source}",
+            headers={"X-StorageApi-Token": token},
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise UserException(
+                f"Could not read table '{tables[0].source}' from Storage (HTTP {response.status_code})."
+            )
+        return [SelectElement(col) for col in response.json().get("columns", [])]
 
     @sync_action("search")
     def search(self) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "title": "OneDrive/SharePoint Writer — Target",
+  "title": "OneDrive/SharePoint Writer \u2014 Target",
   "required": [
     "mode"
   ],
@@ -8,7 +8,7 @@
     "mode": {
       "type": "string",
       "title": "Output Mode",
-      "description": "How this row writes data — File uploads mapped files as-is and writes mapped tables as CSV files; Worksheet writes one mapped table into an Excel worksheet.",
+      "description": "How this row writes data \u2014 File uploads mapped files as-is and writes mapped tables as CSV files; Worksheet writes one mapped table into an Excel worksheet.",
       "enum": [
         "file",
         "worksheet"
@@ -70,7 +70,7 @@
           "title": "Folder Path",
           "description": "Folder inside the library; missing folders are created automatically",
           "options": {
-            "tooltip": "Relative to the library root. Supports the {{date}} placeholder, e.g. acme/reports/{{date}}/ — resolved at run start (UTC) by default, or use the Date field below (e.g. set Date to 'yesterday') to write into a different day's folder.",
+            "tooltip": "Relative to the library root. Supports the {{date}} placeholder, e.g. acme/reports/{{date}}/ \u2014 resolved at run start (UTC) by default, or use the Date field below (e.g. set Date to 'yesterday') to write into a different day's folder.",
             "inputAttributes": {
               "placeholder": "acme/reports/{{date}}/"
             }
@@ -364,14 +364,19 @@
       },
       "options": {
         "tooltip": "Column names from the input table's header, e.g. id. Required when Write Mode is set to Upsert (Incremental).",
-        "inputAttributes": {
-          "placeholder": "id"
-        },
         "dependencies": {
           "write_mode": "upsert"
+        },
+        "tags": true,
+        "async": {
+          "label": "Load Columns",
+          "action": "listColumns",
+          "cache": false
         }
       },
-      "propertyOrder": 51
+      "propertyOrder": 51,
+      "format": "select",
+      "uniqueItems": true
     },
     "batch_size": {
       "type": "integer",

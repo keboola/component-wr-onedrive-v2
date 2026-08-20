@@ -825,3 +825,64 @@ class TestSyncActionRetryBudget:
         _, kwargs = mock_graph_client.call_args
         assert kwargs["total_wait_cap_seconds"] == 15
         assert kwargs["max_retry_attempts"] == 2
+
+
+class TestListColumnsSyncAction:
+    """`listColumns` mirrors wr-delta-lake's list_table_columns (forwarded Storage token)."""
+
+    @staticmethod
+    def _component(tmp_path, monkeypatch, tables, url="https://connection.test", token="tok-123"):
+        import json as _json
+        from unittest import mock
+
+        datadir = tmp_path / "data"
+        (datadir / "in" / "tables").mkdir(parents=True)
+        (datadir / "out" / "tables").mkdir(parents=True)
+        config = {
+            "parameters": {"mode": "worksheet", "account": {"account_type": "private_onedrive"}},
+            "storage": {"input": {"tables": tables}},
+            "action": "run",
+        }
+        (datadir / "config.json").write_text(_json.dumps(config))
+        monkeypatch.setenv("KBC_DATADIR", str(datadir))
+        if url:
+            monkeypatch.setenv("KBC_URL", url)
+        if token:
+            monkeypatch.setenv("KBC_TOKEN", token)
+        import component as component_module
+
+        return component_module.Component(), mock
+
+    def test_returns_columns_from_storage_api(self, tmp_path, monkeypatch):
+        comp, mock = self._component(
+            tmp_path, monkeypatch, [{"source": "in.c-x.orders", "destination": "orders.csv"}]
+        )
+        response = mock.MagicMock(status_code=200)
+        response.json.return_value = {"columns": ["order_id", "status"]}
+        with mock.patch("component.requests.get", return_value=response) as get:
+            elements = comp.list_columns()
+        assert [e.value for e in elements] == ["order_id", "status"]
+        called_url = get.call_args.args[0]
+        assert called_url.endswith("/v2/storage/tables/in.c-x.orders")
+        assert get.call_args.kwargs["headers"]["X-StorageApi-Token"] == "tok-123"
+
+    def test_no_input_table_is_user_error(self, tmp_path, monkeypatch):
+        import pytest
+        from keboola.component.exceptions import UserException
+
+        comp, _ = self._component(tmp_path, monkeypatch, [])
+        with pytest.raises(UserException, match="Map an input table"):
+            comp.list_columns()
+
+    def test_missing_forwarded_token_is_user_error(self, tmp_path, monkeypatch):
+        import pytest
+        from keboola.component.exceptions import UserException
+
+        monkeypatch.delenv("KBC_TOKEN", raising=False)
+        monkeypatch.delenv("KBC_URL", raising=False)
+        comp, _ = self._component(
+            tmp_path, monkeypatch, [{"source": "in.c-x.orders", "destination": "o.csv"}],
+            url=None, token=None,
+        )
+        with pytest.raises(UserException, match="forwardToken"):
+            comp.list_columns()
