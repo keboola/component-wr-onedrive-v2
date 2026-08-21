@@ -1,6 +1,6 @@
 """Golden tests: v1-parity sync-action output shapes (plan Task 8).
 
-Fixtures under ``tests/parity/golden/`` are ``expected-stdout``/``expected-stderr`` files
+Fixtures under ``tests/fixtures/v1_parity/`` are ``expected-stdout``/``expected-stderr`` files
 copied verbatim from ``keboola.wr-onedrive`` (v1, PHP)'s own datadir test suite
 (``tests/datadir/<case>/``) — see the design spec §5 "byte-compatible v1 output shapes". Each
 test here builds a `Component` with a mocked `GraphClient` whose ``get``/``post``/``put``
@@ -38,7 +38,7 @@ from client.exceptions import GraphBadRequestError, GraphNotFoundError
 from client.graph_client import GraphClient
 from component import Component
 
-FIXTURES_DIR = Path(__file__).parent / "golden"
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "v1_parity"
 
 
 def _oauth_credentials() -> dict:

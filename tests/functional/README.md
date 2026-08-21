@@ -7,17 +7,16 @@ Microsoft Graph HTTP cassette (`source/data/cassettes/requests.json`) plus captu
 action output / expected exit code.
 
 Every scenario declared in `tests/setup/configs.json` has been recorded against the real
-Microsoft 365 test tenant and its cassette is committed here — `tests/e2e/test_functional_vcr.py`
-replays all of them fully offline (no network access, no credentials needed). The harness still
-supports the other two states it was designed for (not-yet-recorded scenarios report as an
-explicit, individually-named `pytest` **skip**; a human with real `secrets.json` credentials can
-re-record any scenario at any time) — see that module's docstring for why the suite must stay
-green in all three states (not recorded / recorded+replaying / actively recording).
+Microsoft 365 test tenant and its cassette is committed here — `tests/test_functional.py`
+auto-discovers and replays all of them fully offline (no network access, no credentials needed).
+If a scenario hasn't been recorded yet, `tests/test_functional.py` simply doesn't collect it (it
+auto-discovers cases by cassette presence); a human with real `secrets.json` credentials can
+re-record any scenario, or record a newly-declared one, at any time with the command below.
 
 ## Recording — one command
 
 ```bash
-uv run python scripts/record_vcr_cassettes.py
+uv run python tests/setup/record_vcr_cassettes.py
 ```
 
 Add `--regenerate` to force re-recording every scenario from scratch (default: scenarios that
@@ -58,8 +57,8 @@ The script:
 ```
 
 Scope decision (2026-08-18): record against **Business + SharePoint account types only**.
-Personal-OneDrive flows are already covered by the mocked `GraphFake` suite
-(`tests/e2e/test_functional_http.py`) — no personal-account cassettes are recorded.
+Personal-OneDrive flows are already covered by the mocked `GraphFake` suite (section 3 of
+`tests/test_datadir.py`) — no personal-account cassettes are recorded.
 
 **Update (2026-08-19, `listLibraries`/`listWorkbooks`/`listWorksheets` dropdown UX addition):**
 `GET /me/drive` (used by `listLibraries`'s new `onedrive_for_business`/`private_onedrive`
@@ -67,7 +66,7 @@ default-drive branch, and by `listWorkbooks`'s/`_resolve_picker_drive_id`'s fall
 account types) `403`s with `notAllowed` against this test tenant's authorized user — it has no
 provisioned personal OneDrive. That business/private-account branch is therefore **not
 recordable here** and is covered by mocked unit tests only
-(`tests/component/test_component.py::TestListLibraries`/`TestListWorkbooks`); no cassette exists for it, and
+(`tests/test_datadir.py::TestListLibraries`/`TestListWorkbooks`); no cassette exists for it, and
 none should be recorded as if the call actually succeeded. `listWorkbooks`/`listWorksheets`
 themselves are recorded against the SharePoint account (16/17 above), same as every other
 scenario in this scope decision.
@@ -143,7 +142,7 @@ refresh token and re-run.
 
 ```bash
 rm -rf tests/functional/14_createWorksheet
-uv run python scripts/record_vcr_cassettes.py
+uv run python tests/setup/record_vcr_cassettes.py
 ```
 
 (scenarios with dependents — e.g. 20/21/22, or 11/12/13/14/15/16/17 (16/17 both target the

@@ -7,7 +7,7 @@ manually by a human holding real Microsoft 365 test-tenant credentials, never at
 
 Usage::
 
-    uv run python scripts/record_vcr_cassettes.py
+    uv run python tests/setup/record_vcr_cassettes.py
 
 Reads ``secrets.json`` (repo root, gitignored) — shape::
 
@@ -70,7 +70,7 @@ logger = logging.getLogger("record_vcr_cassettes")
 for _noisy_logger in ("vcr", "vcr.stubs", "vcr.cassette", "urllib3"):
     logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SECRETS_PATH = REPO_ROOT / "secrets.json"
 DEFINITIONS_PATH = REPO_ROOT / "tests" / "setup" / "configs.json"
 INPUT_FILES_DIR = REPO_ROOT / "tests" / "setup" / "input_files"

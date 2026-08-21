@@ -3,7 +3,7 @@
 Not part of the runtime image (``openpyxl`` is a *dev*-only dependency — see ``pyproject.toml``).
 Run manually whenever the fixture needs regenerating:
 
-    uv run python scripts/generate_empty_workbook_fixture.py
+    uv run python tests/setup/generate_empty_workbook_fixture.py
 
 Produces a minimal, valid ``.xlsx`` workbook with a single sheet named ``New`` (v1 parity:
 ``keboola.wr-onedrive`` names the sheet it auto-creates ``New`` when it uploads a brand-new
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-FIXTURE_PATH = Path(__file__).resolve().parent.parent / "src" / "client" / "fixtures" / "empty.xlsx"
+FIXTURE_PATH = Path(__file__).resolve().parents[2] / "src" / "client" / "fixtures" / "empty.xlsx"
 
 
 def main() -> None:

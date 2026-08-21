@@ -6,7 +6,7 @@ redirect URI, exchanges the code for tokens, and merges the resulting
 at the repo root — the file the VCR recording script reads.
 
 Usage:
-    uv run python scripts/authorize_oauth.py
+    uv run python tests/setup/authorize_oauth.py
 
 Prerequisite: the Azure AD app you use must list the local redirect URI
 (``http://localhost:53682/callback``) under Authentication → Platform
@@ -35,7 +35,7 @@ import requests
 REDIRECT_PORT = 53682
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
 SCOPES = "offline_access User.Read Files.ReadWrite.All Sites.ReadWrite.All"
-SECRETS_PATH = Path(__file__).resolve().parent.parent / "secrets.json"
+SECRETS_PATH = Path(__file__).resolve().parents[2] / "secrets.json"
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -151,7 +151,7 @@ def main() -> None:
     SECRETS_PATH.write_text(json.dumps(merged, indent=2) + "\n")
     granted = payload.get("scope", "?")
     print(f"\nDone. refresh_token written to {SECRETS_PATH.name} (granted scopes: {granted}).")
-    print("You can now run: uv run python scripts/record_vcr_cassettes.py")
+    print("You can now run: uv run python tests/setup/record_vcr_cassettes.py")
 
 
 if __name__ == "__main__":
