@@ -1,0 +1,5 @@
+{
+  "exit_code": 1,
+  "stderr": "Worksheet \"VcrTestSheet\" already exists.",
+  "logs": []
+}

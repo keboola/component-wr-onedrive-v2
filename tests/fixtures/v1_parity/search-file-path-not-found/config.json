@@ -1,0 +1,17 @@
+{
+  "authorization": {
+    "oauth_api": {
+      "credentials": {
+        "#data": "${OAUTH_DATA}",
+        "#appSecret": "${OAUTH_APP_SECRET}",
+        "appKey": "${OAUTH_APP_ID}"
+      }
+    }
+  },
+  "action": "search",
+  "parameters": {
+    "workbook": {
+      "path": "/not/found/file.xlsx"
+    }
+  }
+}

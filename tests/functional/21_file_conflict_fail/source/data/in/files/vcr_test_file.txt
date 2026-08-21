@@ -1,0 +1,3 @@
+This is a small fixture file used by the keboola.wr-onedrive-v2 VCR recording scenarios
+(mode=file conflict-behavior cassettes: 20_file_conflict_replace, 21_file_conflict_fail,
+22_file_conflict_rename). See tests/functional/README.md.

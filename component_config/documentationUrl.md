@@ -1,1 +1,1 @@
-/blob/master/README.md
+https://github.com/keboola/component-wr-onedrive-v2/blob/main/README.md

@@ -1,0 +1,22 @@
+{
+  "action": "listWorksheets",
+  "parameters": {
+    "account": {
+      "account_type": "sharepoint",
+      "tenant_id": "00000000-0000-4000-8000-000000000000",
+      "site_url": "https://keboolaconnection.sharepoint.com/sites/allcompany"
+    },
+    "workbook": {
+      "path": "drive://b!SYhH9exicUGrGy_0TvzL5uC25PR_zHNGj6VgVj1MAxCYP_GMk82nTomheI6pRwOs/keboola-vcr-tests/20260819111755/reports/report.xlsx"
+    }
+  },
+  "authorization": {
+    "oauth_api": {
+      "credentials": {
+        "appKey": "DUMMY_APP_KEY",
+        "#appSecret": "DUMMY_APP_SECRET",
+        "#data": "{\"refresh_token\": \"DUMMY_REFRESH_TOKEN\"}"
+      }
+    }
+  }
+}

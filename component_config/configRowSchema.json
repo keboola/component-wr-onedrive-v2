@@ -1,1 +1,395 @@
-{}
+{
+  "type": "object",
+  "title": "OneDrive/SharePoint Writer \u2014 Target",
+  "required": [
+    "mode"
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Output Mode",
+      "description": "How this row writes data \u2014 File uploads mapped files as-is and writes mapped tables as CSV files; Worksheet writes one mapped table into an Excel worksheet.",
+      "enum": [
+        "file",
+        "worksheet"
+      ],
+      "options": {
+        "enum_titles": [
+          "File",
+          "Worksheet"
+        ]
+      },
+      "default": "file",
+      "propertyOrder": 1
+    },
+    "destination": {
+      "type": "object",
+      "title": "Destination",
+      "format": "grid",
+      "propertyOrder": 10,
+      "options": {
+        "dependencies": {
+          "mode": "file"
+        }
+      },
+      "properties": {
+        "helper_account_type": {
+          "type": "string",
+          "title": "Helper Account Type",
+          "description": "Hidden helper: mirrors the root configuration's account.account_type so sibling fields below can depend on it (a row schema cannot reference the root config directly).",
+          "template": "{{val}}",
+          "watch": {
+            "val": "_metadata_.root.parameters.account.account_type"
+          },
+          "options": {
+            "hidden": true
+          },
+          "propertyOrder": 0
+        },
+        "drive_id": {
+          "type": "string",
+          "title": "Document Library",
+          "format": "select",
+          "enum": [],
+          "description": "Target document library (drive) for the upload",
+          "options": {
+            "tooltip": "Only applies to SharePoint accounts with more than one library. Leave empty to use the site's default document library.",
+            "async": {
+              "label": "List Libraries",
+              "action": "listLibraries",
+              "autoload": true
+            },
+            "dependencies": {
+              "helper_account_type": "sharepoint"
+            }
+          },
+          "propertyOrder": 1
+        },
+        "folder_path": {
+          "type": "string",
+          "title": "Folder Path",
+          "description": "Folder inside the library; missing folders are created automatically",
+          "options": {
+            "tooltip": "Relative to the library root. Supports the {{date}} placeholder, e.g. acme/reports/{{date}}/ \u2014 resolved at run start (UTC) by default, or use the Date field below (e.g. set Date to 'yesterday') to write into a different day's folder.",
+            "inputAttributes": {
+              "placeholder": "acme/reports/{{date}}/"
+            }
+          },
+          "propertyOrder": 2
+        },
+        "date": {
+          "type": "string",
+          "title": "Date",
+          "description": "Date used by the {{date}} placeholder in Folder Path",
+          "options": {
+            "tooltip": "Accepts a relative expression (yesterday, 3 days ago, last week) or an absolute date (2026-01-31). Leave empty to default to the job's start date (UTC).",
+            "inputAttributes": {
+              "placeholder": "yesterday"
+            }
+          },
+          "propertyOrder": 3
+        },
+        "conflict_behavior": {
+          "type": "string",
+          "title": "Conflict Behavior",
+          "description": "What to do when a file with the same name already exists",
+          "enum": [
+            "fail",
+            "replace",
+            "rename"
+          ],
+          "options": {
+            "enum_titles": [
+              "Fail",
+              "Replace",
+              "Rename"
+            ]
+          },
+          "default": "fail",
+          "propertyOrder": 4
+        }
+      }
+    },
+    "csv": {
+      "type": "object",
+      "title": "CSV Options (for mapped tables)",
+      "format": "grid",
+      "propertyOrder": 20,
+      "options": {
+        "dependencies": {
+          "mode": "file"
+        }
+      },
+      "properties": {
+        "file_name": {
+          "type": "string",
+          "title": "File Name",
+          "description": "Name of the uploaded CSV file",
+          "options": {
+            "tooltip": "Only applies when exactly one table is mapped to this row. Defaults to the table's name with a .csv extension when left empty; leave empty when more than one table is mapped (each is then uploaded as '<table name>.csv'). Supports the {{date}} placeholder, resolved the same way as Folder Path's.",
+            "inputAttributes": {
+              "placeholder": "orders.csv"
+            }
+          },
+          "propertyOrder": 1
+        },
+        "delimiter": {
+          "type": "string",
+          "title": "Delimiter",
+          "description": "Field delimiter character",
+          "default": ",",
+          "propertyOrder": 2
+        },
+        "enclosure": {
+          "type": "string",
+          "title": "Enclosure",
+          "description": "Field enclosure (quote) character",
+          "default": "\"",
+          "propertyOrder": 3
+        },
+        "include_header": {
+          "type": "boolean",
+          "format": "checkbox",
+          "title": "Include Header",
+          "description": "Include the column header row in the uploaded file",
+          "default": true,
+          "propertyOrder": 4
+        }
+      }
+    },
+    "workbook": {
+      "type": "object",
+      "title": "Workbook",
+      "format": "grid",
+      "propertyOrder": 30,
+      "options": {
+        "dependencies": {
+          "mode": "worksheet"
+        }
+      },
+      "properties": {
+        "targeting": {
+          "type": "string",
+          "title": "Targeting",
+          "description": "How to target the workbook",
+          "enum": [
+            "pick",
+            "path"
+          ],
+          "options": {
+            "enum_titles": [
+              "Pick via dropdowns",
+              "By path"
+            ]
+          },
+          "default": "pick",
+          "propertyOrder": 1
+        },
+        "path": {
+          "type": "string",
+          "title": "Workbook Path",
+          "description": "Path to the target workbook; created automatically when missing",
+          "options": {
+            "tooltip": "Accepts a library-relative path (/Reports/data.xlsx), drive://{driveId}/path, site://{siteName}/path, or an https:// sharing link. Use the search sync action to check whether it already exists.",
+            "inputAttributes": {
+              "placeholder": "site://Site Name/folder/workbook.xlsx"
+            },
+            "dependencies": {
+              "targeting": "path"
+            }
+          },
+          "propertyOrder": 2
+        },
+        "drive_id": {
+          "type": "string",
+          "title": "Library",
+          "format": "select",
+          "enum": [],
+          "description": "Document library of an existing workbook",
+          "options": {
+            "tooltip": "Pick the document library that contains the workbook, then pick the workbook itself below. For Private OneDrive/OneDrive for Business accounts this is always the account's own default drive.",
+            "async": {
+              "label": "List Libraries",
+              "action": "listLibraries",
+              "autoload": true
+            },
+            "dependencies": {
+              "targeting": "pick"
+            }
+          },
+          "propertyOrder": 3
+        },
+        "file_id": {
+          "type": "string",
+          "title": "Workbook",
+          "format": "select",
+          "enum": [],
+          "description": "An existing workbook in the selected library",
+          "options": {
+            "tooltip": "Lists the XLSX files found in the Library selected above.",
+            "async": {
+              "label": "List Workbooks",
+              "action": "listWorkbooks",
+              "autoload": [
+                "parameters.workbook.drive_id"
+              ]
+            },
+            "dependencies": {
+              "targeting": "pick"
+            }
+          },
+          "propertyOrder": 4
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "title": "Metadata",
+          "options": {
+            "hidden": true
+          },
+          "propertyOrder": 5
+        }
+      }
+    },
+    "worksheet": {
+      "type": "object",
+      "title": "Worksheet",
+      "format": "grid",
+      "propertyOrder": 40,
+      "options": {
+        "dependencies": {
+          "mode": "worksheet"
+        }
+      },
+      "properties": {
+        "selection": {
+          "type": "string",
+          "title": "Selection",
+          "description": "How to select the worksheet",
+          "enum": [
+            "pick",
+            "name"
+          ],
+          "options": {
+            "enum_titles": [
+              "Pick existing",
+              "By name (creates if missing)"
+            ]
+          },
+          "default": "pick",
+          "propertyOrder": 1
+        },
+        "id": {
+          "type": "string",
+          "title": "Worksheet ID",
+          "format": "select",
+          "enum": [],
+          "description": "An existing worksheet in the workbook configured above",
+          "options": {
+            "tooltip": "Lists the worksheets found in the Workbook configured above.",
+            "async": {
+              "label": "List Worksheets",
+              "action": "listWorksheets",
+              "autoload": [
+                "parameters.workbook.path",
+                "parameters.workbook.drive_id",
+                "parameters.workbook.file_id"
+              ]
+            },
+            "dependencies": {
+              "selection": "pick"
+            }
+          },
+          "propertyOrder": 2
+        },
+        "name": {
+          "type": "string",
+          "title": "Worksheet Name",
+          "description": "Name of the target worksheet; created if it doesn't exist",
+          "options": {
+            "tooltip": "Selects the worksheet by name, creating it if it doesn't exist yet.",
+            "inputAttributes": {
+              "placeholder": "Sheet1"
+            },
+            "dependencies": {
+              "selection": "name"
+            }
+          },
+          "propertyOrder": 3
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "options": {
+            "hidden": true
+          },
+          "title": "Metadata",
+          "propertyOrder": 4
+        }
+      }
+    },
+    "write_mode": {
+      "type": "string",
+      "title": "Write Mode",
+      "description": "How the row's data is written into the worksheet",
+      "enum": [
+        "overwrite",
+        "append",
+        "upsert"
+      ],
+      "options": {
+        "enum_titles": [
+          "Full Load",
+          "Append",
+          "Upsert (Incremental)"
+        ],
+        "tooltip": "Full Load clears the worksheet and rewrites it from cell A1. Append writes new rows below the existing data. Upsert matches rows by Key Columns below and updates them in place, appending any row whose key doesn't already exist.",
+        "dependencies": {
+          "mode": "worksheet"
+        }
+      },
+      "default": "overwrite",
+      "propertyOrder": 50
+    },
+    "key_columns": {
+      "type": "array",
+      "title": "Key Columns",
+      "description": "Column names that identify a row for Upsert write mode",
+      "items": {
+        "type": "string"
+      },
+      "options": {
+        "tooltip": "Column names from the input table's header, e.g. id. Required when Write Mode is set to Upsert (Incremental).",
+        "dependencies": {
+          "write_mode": "upsert"
+        },
+        "tags": true,
+        "async": {
+          "label": "Load Columns",
+          "action": "listColumns",
+          "cache": false
+        }
+      },
+      "propertyOrder": 51,
+      "format": "select",
+      "uniqueItems": true
+    },
+    "batch_size": {
+      "type": "integer",
+      "title": "Batch Size",
+      "description": "Number of rows written per Excel API request",
+      "default": 5000,
+      "minimum": 1,
+      "options": {
+        "dependencies": {
+          "mode": "worksheet"
+        }
+      },
+      "propertyOrder": 52
+    }
+  }
+}
