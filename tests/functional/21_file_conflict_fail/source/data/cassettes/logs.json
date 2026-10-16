@@ -1,0 +1,24 @@
+{
+  "exit_code": 1,
+  "stderr": "No action defined in the configuration, using the default run action.\n'vcr_test_file.txt' already exists at the destination and conflict behavior is 'fail'.\n",
+  "logs": [
+    {
+      "level": "WARNING",
+      "logger": "root",
+      "message": "No action defined in the configuration, using the default run action.",
+      "timestamp": "2026-08-19T10:39:58.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Loading state file..",
+      "timestamp": "2026-08-19T10:39:58.000Z"
+    },
+    {
+      "level": "ERROR",
+      "logger": "__main__",
+      "message": "'vcr_test_file.txt' already exists at the destination and conflict behavior is 'fail'.",
+      "timestamp": "2026-08-19T10:39:58.000Z"
+    }
+  ]
+}

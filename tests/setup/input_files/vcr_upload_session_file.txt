@@ -1,0 +1,9 @@
+Fixture for the 23_upload_session_small_threshold VCR scenario.
+This line is repeated a few times so the file exceeds the artificially-lowered
+SIMPLE_UPLOAD_THRESHOLD applied only for this scenario by scripts/record_vcr_cassettes.py,
+forcing the createUploadSession + chunked PUT code path instead of a simple PUT.
+Line 4 of filler content to push the byte count comfortably past the forced threshold.
+Line 5 of filler content to push the byte count comfortably past the forced threshold.
+Line 6 of filler content to push the byte count comfortably past the forced threshold.
+Line 7 of filler content to push the byte count comfortably past the forced threshold.
+Line 8 of filler content to push the byte count comfortably past the forced threshold.

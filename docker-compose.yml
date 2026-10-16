@@ -1,19 +1,29 @@
+# Sync note: tracks cookiecutter-python-component — update when template changes
+# Do not change: KBC_DATADIR=./data, service structure.
+# Deviate: `test` sets `target: test` (not in the generic template) because this component's
+# Dockerfile is multi-stage (base -> test -> production, the last being the default build
+# target) — without it, `docker compose build test` would build the `production` stage, which
+# has no dev dependencies and no tests/ directory (phase 8 audit finding: this previously also
+# used a broken exec-form `command` with a single unsplit string, which `sh` would look up as one
+# literal executable name and fail to find).
 services:
   # for development purposes
   dev:
-    build: .
-    volumes:
-        - ./:/code
-        - ./data:/data
-    environment:
-      - KBC_DATADIR=./data
-  test:
-    # Use to run flake8 and unittests checks
     build: .
     volumes:
       - ./:/code
       - ./data:/data
     environment:
       - KBC_DATADIR=./data
+  test:
+    build:
+      context: .
+      target: test
+    volumes:
+      - ./:/code
+      - ./data:/data
+    environment:
+      - KBC_DATADIR=./data
     command:
-      - python -m pytest tests/ --tb=short -q
+      - /bin/sh
+      - /code/scripts/build_n_test.sh

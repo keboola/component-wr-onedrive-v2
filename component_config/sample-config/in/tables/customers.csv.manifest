@@ -1,0 +1,6 @@
+{
+    "id": "in.c-example.customers",
+    "name": "customers",
+    "primary_key": ["id"],
+    "columns": ["id", "name", "email"]
+}

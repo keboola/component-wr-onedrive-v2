@@ -1,0 +1,18 @@
+{
+  "authorization": {
+    "oauth_api": {
+      "credentials": {
+        "#data": "${OAUTH_DATA}",
+        "#appSecret": "${OAUTH_APP_SECRET}",
+        "appKey": "${OAUTH_APP_ID}"
+      }
+    }
+  },
+  "action": "getWorksheets",
+  "parameters": {
+    "workbook": {
+      "driveId": "b!nZgsjp3RK0aRFp01PZWjKUicqho1KehCtKM1UhLEWybvgM_dt6mJRKV57vuJLf6P",
+      "fileId": "03GQDMCCLEQDECJHR7CRF3WI7AB4GWJESQ"
+    }
+  }
+}

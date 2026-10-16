@@ -1,1 +1,1 @@
-/blob/master/LICENSE.md
+https://github.com/keboola/component-wr-onedrive-v2/blob/main/LICENSE.md

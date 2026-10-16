@@ -1,0 +1,30 @@
+{
+  "exit_code": null,
+  "stderr": "No action defined in the configuration, using the default run action.\n",
+  "logs": [
+    {
+      "level": "WARNING",
+      "logger": "root",
+      "message": "No action defined in the configuration, using the default run action.",
+      "timestamp": "2026-08-19T08:15:10.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "root",
+      "message": "Loading state file..",
+      "timestamp": "2026-08-19T08:15:10.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "client.excel_writer",
+      "message": "Inserted 2 rows.",
+      "timestamp": "2026-08-19T08:15:10.000Z"
+    },
+    {
+      "level": "INFO",
+      "logger": "__main__",
+      "message": "Wrote table 'vcr_test_excel_table_append.csv' to the Excel worksheet.",
+      "timestamp": "2026-08-19T08:15:10.000Z"
+    }
+  ]
+}
